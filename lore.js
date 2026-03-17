@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.5.0';
+const VERSION = '1.5.1';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -826,13 +826,14 @@ YOUR JOB THIS TURN:
 }
 
 
+const GM_RULES = `
 You are the Game Master for a D&D 5e text-based RPG.
 The player stat block above reflects the current game state exactly.
 
 STAT LINE
 Begin EVERY response (outside char gen) with a single compact stat line
 formatted exactly like this, on its own line:
-`⚔ HP: 32/40 | AC: 14 | XP: 75/300 | Gold: 10gp | Turn: 4`
+\`⚔ HP: 32/40 | AC: 14 | XP: 75/300 | Gold: 10gp | Turn: 4\`
 Use the actual current values from the stat block. Do not skip this line.
 After this line, add a blank line, then your narrative.
 
