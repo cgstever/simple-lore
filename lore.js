@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.5.2';
+const VERSION = '1.5.3';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -746,8 +746,10 @@ Complete ALL FOUR STEPS before starting the adventure.
 Simulate 4d6-drop-lowest six times. Present the results like:
   Roll 1: 16   Roll 2: 14   Roll 3: 13   Roll 4: 12   Roll 5: 10   Roll 6: 8
 Ask the player to assign each roll to STR / DEX / CON / INT / WIS / CHA.
-Once assigned, emit set_scores. Example event:
-  { "type": "set_scores", "str": 12, "dex": 16, "con": 13, "int": 10, "wis": 14, "cha": 8 }
+Once assigned, emit set_scores wrapped in a fenced block like this — do NOT show the raw JSON in your reply, only emit it inside the fences:
+\`\`\`game
+{ "type": "set_scores", "str": 12, "dex": 16, "con": 13, "int": 10, "wis": 14, "cha": 8 }
+\`\`\`
 
 -- STEP 2  -  RACE --
 Present these 15 options with bonuses and signature traits:
@@ -758,8 +760,10 @@ Present these 15 options with bonuses and signature traits:
   Tiefling (+2 CHA +1 INT), Dragonborn (+2 STR +1 CHA),
   Half-Elf (+2 CHA +1 to two of your choice),
   Half-Orc (+2 STR +1 CON), Aasimar (+2 CHA +1 WIS)
-Once chosen, emit set_race. For half-elf, include bonusStat1 and bonusStat2.
-  { "type": "set_race", "race": "High Elf" }
+Once chosen, emit set_race inside fences. For half-elf, include bonusStat1 and bonusStat2:
+\`\`\`game
+{ "type": "set_race", "race": "High Elf" }
+\`\`\`
 
 -- STEP 3  -  CLASS --
 Present all 12 classes with hit dice and role flavour:
@@ -769,12 +773,16 @@ Present all 12 classes with hit dice and role flavour:
   Paladin (d10  -  holy crusader), Ranger (d10  -  wilderness hunter),
   Rogue (d8  -  shadow operative), Sorcerer (d6  -  innate mage),
   Warlock (d8  -  eldritch pact), Wizard (d6  -  scholarly caster)
-Choose 2 class-appropriate starting skill proficiencies and include them.
-  { "type": "set_class", "class": "Wizard", "skills": ["Arcana", "History"] }
+Choose 2 class-appropriate starting skill proficiencies and emit inside fences:
+\`\`\`game
+{ "type": "set_class", "class": "Wizard", "skills": ["Arcana", "History"] }
+\`\`\`
 
 -- STEP 4  -  NAME --
-Ask for the character's name (and optionally a brief backstory hook).
-  { "type": "rename", "name": "Lyra Ashveil" }
+Ask for the character's name (and optionally a brief backstory hook), then emit inside fences:
+\`\`\`game
+{ "type": "rename", "name": "Lyra Ashveil" }
+\`\`\`
 
 Then emit, in order:
 1. creation_complete
@@ -1083,8 +1091,11 @@ const SimpleLore = {
         state.player.ac = calcAC(state);
 
         // Strip ```game ... ``` blocks from the visible chat message
+        // Also strip bare JSON lines that look like game events leaked without fences
         const cleanedText = (assistantText || '')
             .replace(/```game[\s\S]*?```/gi, '')
+            .replace(/^\s*\{[\s\S]*?"type"\s*:\s*"[^"]+[\s\S]*?\}\s*$/gm, '')
+            .replace(/^\s*\[[\s\S]*?"type"\s*:\s*"[^"]+[\s\S]*?\]\s*$/gm, '')
             .replace(/\n{3,}/g, '\n\n')
             .trim();
 
