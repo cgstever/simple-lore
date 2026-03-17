@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.6.1';
+const VERSION = '1.6.2';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -1135,9 +1135,50 @@ const SimpleLore = {
     },
 
     onSettingsRendered() {
-        // Refresh the HUD panel every 2s so it stays live after each turn
+        // Seed _hudState from IndexedDB immediately so the panel
+        // never flashes "Waiting for game to start" between turns.
+        const tryLoadState = async () => {
+            try {
+                if (typeof window === 'undefined' || !window.SillyTavern) return;
+                const ctx    = window.SillyTavern.getContext();
+                const chatId = ctx.getCurrentChatId?.() || 'unknown';
+                let charName = ctx.characters?.[ctx.characterId]?.name;
+                if (!charName) {
+                    const chatLog = ctx.chat || [];
+                    for (let i = chatLog.length - 1; i >= 0; i--) {
+                        const m = chatLog[i];
+                        if (!m.is_user && !m.is_system && m.name) { charName = m.name; break; }
+                    }
+                }
+                charName = charName || 'unknown';
+                const key = `${charName}::${chatId}`;
+
+                // Access IDB directly — same DB/store the extension uses
+                const db = await new Promise((res, rej) => {
+                    const req = indexedDB.open('overwrite', 2);
+                    req.onsuccess = () => res(req.result);
+                    req.onerror  = () => rej(req.error);
+                });
+                const stored = await new Promise((res, rej) => {
+                    const tx  = db.transaction('session_state', 'readonly');
+                    const req = tx.objectStore('session_state').get(key);
+                    req.onsuccess = () => res(req.result?.data ?? null);
+                    req.onerror   = () => rej(req.error);
+                });
+                if (stored && stored.player) {
+                    _hudState = stored;
+                    const el = document.getElementById('simple-lore-hud');
+                    if (el) el.innerHTML = buildHudHtml(_hudState);
+                }
+            } catch (_) { /* IDB not available yet */ }
+        };
+
+        tryLoadState();
+
+        // Keep refreshing so state stays live after each turn
         if (_hudInterval) clearInterval(_hudInterval);
-        _hudInterval = setInterval(() => {
+        _hudInterval = setInterval(async () => {
+            await tryLoadState();
             const el = document.getElementById('simple-lore-hud');
             if (el && document.contains(el)) el.innerHTML = buildHudHtml(_hudState);
         }, 5000);
