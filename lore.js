@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -829,6 +829,13 @@ YOUR JOB THIS TURN:
 You are the Game Master for a D&D 5e text-based RPG.
 The player stat block above reflects the current game state exactly.
 
+STAT LINE
+Begin EVERY response (outside char gen) with a single compact stat line
+formatted exactly like this, on its own line:
+`⚔ HP: 32/40 | AC: 14 | XP: 75/300 | Gold: 10gp | Turn: 4`
+Use the actual current values from the stat block. Do not skip this line.
+After this line, add a blank line, then your narrative.
+
 NARRATIVE
 • Vivid second-person prose, 4–8 sentences per scene.
 • End every turn with 4–6 numbered action choices for the player.
@@ -892,6 +899,123 @@ EVENT BLOCKS — emit AFTER narrative, only include events that occurred:
 \`\`\`
 `.trim();
 
+// ── HUD ───────────────────────────────────────────────────────────────────────
+// Cached state reference so the panel can live-update without waiting for IDB.
+let _hudState = null;
+let _hudInterval = null;
+
+function buildHudHtml(state) {
+    if (!state || !state.player) {
+        return `<div style="color:#888;font-style:italic;padding:8px;">
+            Waiting for game to start…
+        </div>`;
+    }
+
+    const p     = state.player;
+    const prof  = pb(p.level);
+    const hpPct = Math.max(0, Math.min(100, Math.round((p.hp / p.maxHp) * 100)));
+    const xpLeft = xpToNextLevel(p.xp);
+    const xpPct  = xpLeft !== null
+        ? Math.round((p.xp / XP_THRESHOLDS[p.level + 1]) * 100)
+        : 100;
+
+    const hpColor  = hpPct > 60 ? '#4caf50' : hpPct > 25 ? '#ff9800' : '#f44336';
+    const stats    = ['str','dex','con','int','wis','cha'];
+    const statGrid = stats.map(s => `
+        <div style="text-align:center;background:#1a1a2e;border-radius:4px;padding:4px 2px;">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;">${s}</div>
+            <div style="font-size:14px;font-weight:bold;color:#e0e0ff;">${p[s]}</div>
+            <div style="font-size:11px;color:#aaa;">${sign(mod(p[s]))}</div>
+        </div>`).join('');
+
+    const activeQ  = (state.quests || []).filter(q => !q.done);
+    const questHtml = activeQ.length
+        ? activeQ.map(q => `<div style="margin:3px 0;padding:4px 6px;background:#1a1a2e;border-left:3px solid #7c4dff;border-radius:2px;font-size:12px;">
+            <b style="color:#ce93d8;">${q.title}</b><br>
+            <span style="color:#aaa;">${q.objective}</span>
+          </div>`).join('')
+        : `<div style="color:#555;font-style:italic;font-size:12px;">No active quests</div>`;
+
+    const invHtml = (state.inventory || []).length
+        ? (state.inventory || []).map(i => `<div style="font-size:12px;color:#ccc;padding:1px 0;">• ${i}</div>`).join('')
+        : `<div style="color:#555;font-style:italic;font-size:12px;">Empty</div>`;
+
+    const condHtml = (state.conditions || []).length
+        ? (state.conditions || []).map(c => `<span style="background:#b71c1c;color:#fff;border-radius:3px;padding:1px 5px;font-size:11px;margin-right:3px;">${c}</span>`).join('')
+        : '';
+
+    const world = state.flags?.world;
+    const worldLine = world
+        ? `<div style="font-size:11px;color:#888;margin-bottom:6px;">${world.town}, ${world.region}</div>`
+        : '';
+
+    let slotHtml = '';
+    if (state.spellSlots) {
+        if (state.spellSlots.pact) {
+            const pk = state.spellSlots.pact;
+            slotHtml = `<div style="margin-top:6px;font-size:12px;color:#ce93d8;">Pact Slots (L${pk.level}): ${pk.count - pk.used}/${pk.count}</div>`;
+        } else {
+            const slots = Object.entries(state.spellSlots)
+                .map(([l, s]) => `<span style="background:#4a148c;color:#e1bee7;border-radius:3px;padding:1px 5px;font-size:11px;margin-right:2px;">L${l}: ${s.max - s.used}/${s.max}</span>`)
+                .join('');
+            slotHtml = `<div style="margin-top:6px;">${slots}</div>`;
+        }
+    }
+
+    const goldStr = [
+        p.gold   ? `${p.gold}gp`   : '',
+        p.silver ? `${p.silver}sp` : '',
+        p.copper ? `${p.copper}cp` : '',
+    ].filter(Boolean).join(' ') || '0gp';
+
+    return `
+<div style="font-family:monospace;color:#e0e0ff;font-size:13px;line-height:1.5;">
+  <div style="font-size:15px;font-weight:bold;color:#ce93d8;margin-bottom:2px;">
+    ${p.name || 'Adventurer'}
+  </div>
+  ${worldLine}
+  <div style="font-size:12px;color:#aaa;margin-bottom:8px;">
+    ${p.race ? p.race.charAt(0).toUpperCase()+p.race.slice(1) : '—'}
+    ${p.class ? p.class.charAt(0).toUpperCase()+p.class.slice(1) : '—'}
+    · Level ${p.level} · Prof +${prof}
+  </div>
+
+  <div style="margin-bottom:4px;font-size:11px;color:#888;">HP</div>
+  <div style="background:#111;border-radius:4px;overflow:hidden;height:14px;margin-bottom:2px;">
+    <div style="width:${hpPct}%;background:${hpColor};height:100%;transition:width .3s;"></div>
+  </div>
+  <div style="font-size:12px;margin-bottom:6px;">${p.hp}/${p.maxHp} · AC ${p.ac} · Init ${sign(mod(p.dex))}</div>
+
+  <div style="margin-bottom:4px;font-size:11px;color:#888;">XP</div>
+  <div style="background:#111;border-radius:4px;overflow:hidden;height:8px;margin-bottom:2px;">
+    <div style="width:${xpPct}%;background:#7c4dff;height:100%;transition:width .3s;"></div>
+  </div>
+  <div style="font-size:11px;color:#aaa;margin-bottom:8px;">
+    ${p.xp} XP · ${xpLeft !== null ? `${xpLeft} to Lv${p.level+1}` : 'Max Level'}
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:3px;margin-bottom:8px;">
+    ${statGrid}
+  </div>
+
+  <div style="font-size:11px;color:#888;margin-bottom:2px;">Gold: ${goldStr} · Speed: ${p.speed}ft</div>
+  ${condHtml ? `<div style="margin:4px 0;">${condHtml}</div>` : ''}
+  ${slotHtml}
+
+  <details style="margin-top:8px;">
+    <summary style="cursor:pointer;font-size:12px;color:#888;">Inventory (${(state.inventory||[]).length})</summary>
+    <div style="margin-top:4px;">${invHtml}</div>
+  </details>
+
+  <details style="margin-top:6px;" open>
+    <summary style="cursor:pointer;font-size:12px;color:#888;">Quests (${activeQ.length})</summary>
+    <div style="margin-top:4px;">${questHtml}</div>
+  </details>
+
+  <div style="margin-top:6px;font-size:10px;color:#444;">Turn ${state.turn || 0} · simple-lore v${VERSION}</div>
+</div>`;
+}
+
 // ── Module Export ──────────────────────────────────────────────────────────────
 
 const SimpleLore = {
@@ -901,6 +1025,19 @@ const SimpleLore = {
     init(data) {
         console.log(`[SimpleLore] v${VERSION} loaded`);
         return {};
+    },
+
+    getSettingsHtml() {
+        return `<div id="simple-lore-hud">${buildHudHtml(_hudState)}</div>`;
+    },
+
+    onSettingsRendered() {
+        // Refresh the HUD panel every 2s so it stays live after each turn
+        if (_hudInterval) clearInterval(_hudInterval);
+        _hudInterval = setInterval(() => {
+            const el = document.getElementById('simple-lore-hud');
+            if (el) el.innerHTML = buildHudHtml(_hudState);
+        }, 2000);
     },
 
     processTurn({ state, systemText, messages, charNameHint, personaName } = {}) {
@@ -932,6 +1069,7 @@ const SimpleLore = {
             }
         }
 
+        _hudState = state;
         return { systemPrompt, state };
     },
 
@@ -947,6 +1085,7 @@ const SimpleLore = {
             .replace(/\n{3,}/g, '\n\n')
             .trim();
 
+        _hudState = state;
         return { state, cleanedText };
     },
 };
