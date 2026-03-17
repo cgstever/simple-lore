@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.6.0';
+const VERSION = '1.6.1';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -738,11 +738,14 @@ function pickWorld() {
 
 // ── System Prompts ─────────────────────────────────────────────────────────────
 
-function buildCreationPrompt() {
-    // Roll real 4d6-drop-lowest using the dice integration
-    const scoreRolls = Array.from({ length: 6 }, () => roll4d6dropLowest());
+function buildCreationPrompt(state) {
+    // Roll ONCE and cache in state so re-renders don't re-roll
+    if (!state.charCreation.scoreRolls) {
+        state.charCreation.scoreRolls = Array.from({ length: 6 }, () => roll4d6dropLowest());
+    }
+    const scoreRolls = state.charCreation.scoreRolls;
     const rollLines  = scoreRolls
-        .map((r, i) => `Roll ${i+1}: ${r.total}  (${r.rolls.join(',')} - dropped lowest, kept ${r.kept.join('+')})`)
+        .map((r, i) => `Roll ${i+1}: ${r.total}  (rolled ${r.rolls.join(',')}, kept ${r.kept.join('+')})`)
         .join('\n  ');
 
     return (`
@@ -1059,15 +1062,7 @@ function roll(formula) {
                 result.total = r.total;
                 result.rolls = r.rolls;
                 result.display = `[${formula}: ${r.rolls.join('+')} = ${r.total}]`;
-                // Post the visible roll as a system message so it appears in chat
-                try {
-                    const ctx = window.SillyTavern.getContext();
-                    const charName = ctx?.characters?.[ctx?.characterId]?.name || 'GM';
-                    ctx?.sendSystemMessage?.('generic',
-                        `${charName} rolls ${formula} - Result: ${r.total} (${r.rolls.join(', ')})`,
-                        { isSmallSys: true }
-                    );
-                } catch (_) { /* chat message optional */ }
+                // (system message intentionally omitted - use postRoll() for visible rolls)
                 return result;
             }
         } catch (_) { /* fall through */ }
@@ -1109,6 +1104,19 @@ function roll4d6dropLowest() {
     return { total: kept.reduce((a, b) => a + b, 0), rolls, kept };
 }
 
+
+// Post a visible roll result to chat (use for combat/checks, not for every die)
+function postRoll(label, result) {
+    if (typeof window === 'undefined' || !window.SillyTavern) return;
+    try {
+        const ctx = window.SillyTavern.getContext();
+        ctx?.sendSystemMessage?.('generic',
+            `${label}: ${result.display}`,
+            { isSmallSys: true }
+        );
+    } catch (_) { /* optional */ }
+}
+
 // ── Module Export ──────────────────────────────────────────────────────────────
 
 const SimpleLore = {
@@ -1147,7 +1155,7 @@ const SimpleLore = {
         let systemPrompt;
 
         if (state.charCreation) {
-            systemPrompt = buildCreationPrompt();
+            systemPrompt = buildCreationPrompt(state);
         } else if (state.flags.freshStart) {
             // First turn after char gen  -  set the opening scene
             state.flags.freshStart = false;
