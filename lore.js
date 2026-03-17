@@ -1,5 +1,5 @@
 /**
- * simple-lore  —  D&D 5e stateful RPG lore module for StatefullLore
+ * simple-lore   -   D&D 5e stateful RPG lore module for StatefullLore
  *
  * Implements a full D&D 5e stat foundation:
  *   - STR/DEX/CON/INT/WIS/CHA with modifiers
@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.5.1';
+const VERSION = '1.5.2';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -45,7 +45,7 @@ const CLASSES = {
 
 // Spell slots per class type.
 // Full casters / half casters: index = level-1, inner array = [1st,2nd,3rd,...] slot counts
-// Warlock: pact magic — inner array = [slot_count, slot_level]
+// Warlock: pact magic  -  inner array = [slot_count, slot_level]
 const SPELL_SLOTS_FULL = [
 /*L1 */ [2],
 /*L2 */ [3],
@@ -233,8 +233,8 @@ function buildStatBlock(state) {
         return `${s.toUpperCase()}${mark}${sign(val)}`;
     }).join('  ');
 
-    const raceDisplay  = p.race  ? p.race.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : '—';
-    const classDisplay = p.class ? p.class.charAt(0).toUpperCase() + p.class.slice(1) : '—';
+    const raceDisplay  = p.race  ? p.race.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : ' - ';
+    const classDisplay = p.class ? p.class.charAt(0).toUpperCase() + p.class.slice(1) : ' - ';
 
     const goldStr = [
         p.gold   ? `${p.gold}gp`   : '',
@@ -244,8 +244,8 @@ function buildStatBlock(state) {
 
     const lines = [
         `══ ${p.name} ══`,
-        `${raceDisplay} ${classDisplay}  •  Level ${level}  •  Prof Bonus +${prof}`,
-        `HP ${hpBar}  •  AC ${p.ac}  •  Init ${sign(mod(p.dex))}  •  Speed ${p.speed}ft`,
+        `${raceDisplay} ${classDisplay}  *  Level ${level}  *  Prof Bonus +${prof}`,
+        `HP ${hpBar}  *  AC ${p.ac}  *  Init ${sign(mod(p.dex))}  *  Speed ${p.speed}ft`,
         xpStr,
         `──`,
         statsLine1,
@@ -316,7 +316,7 @@ function parseGameEvents(text) {
             const ev = JSON.parse(m[1].trim());
             if (Array.isArray(ev)) events.push(...ev);
             else events.push(ev);
-        } catch (_) { /* malformed — skip */ }
+        } catch (_) { /* malformed  -  skip */ }
     }
     return events;
 }
@@ -534,7 +534,7 @@ function checkLevelUp(state) {
 
 // ── Encounter Tables (Open5e SRD, CC-BY 4.0) ─────────────────────────────────
 // Monsters per biome, in three CR bands:
-//   low  = CR 1/8–1  (levels 1–2)   mid = CR 2–3 (levels 3–4)   high = CR 4–5 (levels 5+)
+//   low  = CR 1/8-1  (levels 1-2)   mid = CR 2-3 (levels 3-4)   high = CR 4-5 (levels 5+)
 // AC and HP are included so the GM can run combat accurately.
 
 const ENCOUNTERS = {
@@ -655,23 +655,23 @@ const WORLDS = [
         tavern: 'The Split Log',
         tavernDesc: 'low-ceilinged and smoky, smelling of pine resin and cheap ale, favoured by loggers and frontier trappers',
         hooks: [
-            'Missing loggers — men have been vanishing in the deep wood for weeks',
-            'A fey bargain gone wrong — a farmer\'s daughter was taken as payment for a debt her grandfather forgot',
-            'Ruins sighted — a scout returned with rubble carved in no known script and died three days later',
+            'Missing loggers  -  men have been vanishing in the deep wood for weeks',
+            'A fey bargain gone wrong  -  a farmer\'s daughter was taken as payment for a debt her grandfather forgot',
+            'Ruins sighted  -  a scout returned with rubble carved in no known script and died three days later',
         ],
     },
     {
         id: 'saltmere',
         region: 'The Salthallow Coast',
-        regionDesc: 'a jagged coastline of sea stacks, hidden coves, and tidal caves — smuggler country, where the crown\'s writ barely reaches',
+        regionDesc: 'a jagged coastline of sea stacks, hidden coves, and tidal caves  -  smuggler country, where the crown\'s writ barely reaches',
         town: 'Saltmere',
         townDesc: 'a fishing town built on stilts above a tidal flat, its harbour perpetually crowded with boats whose captains ask no questions',
         tavern: 'The Drowned Anchor',
         tavernDesc: 'a raucous dockside tavern built into a converted warehouse, its walls hung with salvaged figureheads and nets',
         hooks: [
-            'A merchant vessel ran aground — its cargo was intact but every soul aboard was gone',
-            'Tidal caves — locals whisper of lights beneath the water and a voice that calls names',
-            'Smuggler war — two crews are about to spill blood over a shipment nobody will describe',
+            'A merchant vessel ran aground  -  its cargo was intact but every soul aboard was gone',
+            'Tidal caves  -  locals whisper of lights beneath the water and a voice that calls names',
+            'Smuggler war  -  two crews are about to spill blood over a shipment nobody will describe',
         ],
     },
     {
@@ -681,11 +681,11 @@ const WORLDS = [
         town: 'Ashford',
         townDesc: 'a mining boomtown built around a rich vein of bloodstone, its streets choked with fortune-seekers and the company guards who watch them',
         tavern: 'The Ember & Tongs',
-        tavernDesc: 'a broad miners\' hall that doubles as a forge waiting room, its tables carved with the names of those who struck it rich — and those who didn\'t',
+        tavernDesc: 'a broad miners\' hall that doubles as a forge waiting room, its tables carved with the names of those who struck it rich  -  and those who didn\'t',
         hooks: [
-            'The deep vein — miners broke into a sealed chamber and something sealed it from the inside for a reason',
-            'Company trouble — the Bloodstone Company is overworking its conscripted labour and someone needs to know',
-            'Dragon bones — a collector is paying absurd sums for intact dragon teeth, which has sent fools into the wastes',
+            'The deep vein  -  miners broke into a sealed chamber and something sealed it from the inside for a reason',
+            'Company trouble  -  the Bloodstone Company is overworking its conscripted labour and someone needs to know',
+            'Dragon bones  -  a collector is paying absurd sums for intact dragon teeth, which has sent fools into the wastes',
         ],
     },
     {
@@ -697,23 +697,23 @@ const WORLDS = [
         tavern: 'The Wayward Ram',
         tavernDesc: 'a broad highland inn with a roaring central hearth, its common room full of merchants, pilgrims, and soldiers all waiting for the same weather to pass',
         hooks: [
-            'The pass is closing — an early blizzard is coming and a caravan is three days overdue',
-            'Cairn walkers — the ancient burial mounds have been disturbed and the dead are not resting',
-            'A noble\'s ransom — a young lord was taken off the road and his family is too proud to involve the crown',
+            'The pass is closing  -  an early blizzard is coming and a caravan is three days overdue',
+            'Cairn walkers  -  the ancient burial mounds have been disturbed and the dead are not resting',
+            'A noble\'s ransom  -  a young lord was taken off the road and his family is too proud to involve the crown',
         ],
     },
     {
         id: 'dunmere',
         region: 'The Dunwater Fens',
-        regionDesc: 'a vast wetland of shallow lakes, reed beds, and floating peat islands that shift season to season — maps are useless here',
+        regionDesc: 'a vast wetland of shallow lakes, reed beds, and floating peat islands that shift season to season  -  maps are useless here',
         town: 'Dunmere',
         townDesc: 'a town built on a rare slab of solid ground above the fens, its houses connected by a web of rope bridges, its people deeply suspicious of outsiders',
         tavern: 'The Bogwitch',
         tavernDesc: 'a creaking, leaning tavern that smells of marsh gas and smoked eel, its landlady a retired hedge witch who charges double for anything after dark',
         hooks: [
-            'The paths are moving — the fen routes that locals have used for generations no longer lead where they should',
-            'Will-o-wisps — travellers are being led into the deep fens and not returning; the wisps have never been this bold',
-            'An old shrine — a half-submerged temple has surfaced after a dry season and factions are already fighting over it',
+            'The paths are moving  -  the fen routes that locals have used for generations no longer lead where they should',
+            'Will-o-wisps  -  travellers are being led into the deep fens and not returning; the wisps have never been this bold',
+            'An old shrine  -  a half-submerged temple has surfaced after a dry season and factions are already fighting over it',
         ],
     },
     {
@@ -725,9 +725,9 @@ const WORLDS = [
         tavern: 'The Red Stirrup',
         tavernDesc: 'a wide-open travellers\' hall built for high volume, its walls decorated with clan banners and its staff armed and unimpressed',
         hooks: [
-            'Clan war brewing — two steppe clans are feuding over grazing rights and both have approached the garrison for support',
-            'The iron sickness — a blight is killing horses across three clans\' territories and nobody knows its source',
-            'A sealed vault — an imperial survey team found a pre-empire structure buried in the steppe and promptly disappeared',
+            'Clan war brewing  -  two steppe clans are feuding over grazing rights and both have approached the garrison for support',
+            'The iron sickness  -  a blight is killing horses across three clans\' territories and nobody knows its source',
+            'A sealed vault  -  an imperial survey team found a pre-empire structure buried in the steppe and promptly disappeared',
         ],
     },
 ];
@@ -742,14 +742,14 @@ const CREATION_PROMPT = `
 You are the Game Master. The player is building their D&D 5e character.
 Complete ALL FOUR STEPS before starting the adventure.
 
-━━ STEP 1 — ABILITY SCORES ━━
+-- STEP 1  -  ABILITY SCORES --
 Simulate 4d6-drop-lowest six times. Present the results like:
   Roll 1: 16   Roll 2: 14   Roll 3: 13   Roll 4: 12   Roll 5: 10   Roll 6: 8
 Ask the player to assign each roll to STR / DEX / CON / INT / WIS / CHA.
 Once assigned, emit set_scores. Example event:
   { "type": "set_scores", "str": 12, "dex": 16, "con": 13, "int": 10, "wis": 14, "cha": 8 }
 
-━━ STEP 2 — RACE ━━
+-- STEP 2  -  RACE --
 Present these 15 options with bonuses and signature traits:
   Human (+1 all), High Elf (+2 DEX +1 INT), Wood Elf (+2 DEX +1 WIS),
   Hill Dwarf (+2 CON +1 WIS), Mountain Dwarf (+2 CON +2 STR),
@@ -761,18 +761,18 @@ Present these 15 options with bonuses and signature traits:
 Once chosen, emit set_race. For half-elf, include bonusStat1 and bonusStat2.
   { "type": "set_race", "race": "High Elf" }
 
-━━ STEP 3 — CLASS ━━
+-- STEP 3  -  CLASS --
 Present all 12 classes with hit dice and role flavour:
-  Barbarian (d12 — primal warrior), Bard (d8 — arcane performer),
-  Cleric (d8 — divine champion), Druid (d8 — nature mystic),
-  Fighter (d10 — weapon master), Monk (d8 — martial artist),
-  Paladin (d10 — holy crusader), Ranger (d10 — wilderness hunter),
-  Rogue (d8 — shadow operative), Sorcerer (d6 — innate mage),
-  Warlock (d8 — eldritch pact), Wizard (d6 — scholarly caster)
+  Barbarian (d12  -  primal warrior), Bard (d8  -  arcane performer),
+  Cleric (d8  -  divine champion), Druid (d8  -  nature mystic),
+  Fighter (d10  -  weapon master), Monk (d8  -  martial artist),
+  Paladin (d10  -  holy crusader), Ranger (d10  -  wilderness hunter),
+  Rogue (d8  -  shadow operative), Sorcerer (d6  -  innate mage),
+  Warlock (d8  -  eldritch pact), Wizard (d6  -  scholarly caster)
 Choose 2 class-appropriate starting skill proficiencies and include them.
   { "type": "set_class", "class": "Wizard", "skills": ["Arcana", "History"] }
 
-━━ STEP 4 — NAME ━━
+-- STEP 4  -  NAME --
 Ask for the character's name (and optionally a brief backstory hook).
   { "type": "rename", "name": "Lyra Ashveil" }
 
@@ -780,11 +780,11 @@ Then emit, in order:
 1. creation_complete
 2. item_add events for class-appropriate starting gear (weapon, armor if any,
    adventuring supplies). Use realistic 5e starting equipment for the class.
-   Examples — Fighter: longsword, shield, chain mail, 5x javelins, explorer's pack
+   Examples  -  Fighter: longsword, shield, chain mail, 5x javelins, explorer's pack
               Wizard: quarterstaff, spellbook, component pouch, scholar's pack, 10gp
               Rogue: shortsword, shortbow + 20 arrows, leather armor, thieves' tools, burglar's pack
 3. gold_change for starting gold appropriate to the class (PHB starting wealth)
-4. A quest_add for the first hook — keep it vague, just enough to motivate leaving the tavern
+4. A quest_add for the first hook  -  keep it vague, just enough to motivate leaving the tavern
 
 Do NOT start the adventure or describe any scene yet. That happens next turn.
 `.trim();
@@ -799,7 +799,7 @@ function buildOpeningPrompt(state) {
     const usedHook = state.flags.openingHook;
 
     return `
-━━ OPENING SCENE ━━
+-- OPENING SCENE --
 The adventure begins NOW. Do not do any more character creation.
 
 WORLD: ${w.region}
@@ -817,11 +817,11 @@ OPENING HOOK (the rumour already in the air when the player sits down):
 ${usedHook}
 
 YOUR JOB THIS TURN:
-• Set the scene inside ${w.tavern} in vivid second-person prose (4–8 sentences).
-• Establish the atmosphere, a few notable NPCs present, and the ambient mood.
-• Weave in the hook naturally — overheard conversation, a notice board, a stranger's muttered warning.
-• End with 4–6 numbered action choices for the player.
-• Do NOT resolve anything yet. This is the opening scene only.
+* Set the scene inside ${w.tavern} in vivid second-person prose (4-8 sentences).
+* Establish the atmosphere, a few notable NPCs present, and the ambient mood.
+* Weave in the hook naturally  -  overheard conversation, a notice board, a stranger's muttered warning.
+* End with 4-6 numbered action choices for the player.
+* Do NOT resolve anything yet. This is the opening scene only.
 `.trim();
 }
 
@@ -838,49 +838,49 @@ Use the actual current values from the stat block. Do not skip this line.
 After this line, add a blank line, then your narrative.
 
 NARRATIVE
-• Vivid second-person prose, 4–8 sentences per scene.
-• End every turn with 4–6 numbered action choices for the player.
-• Progress time naturally (morning → noon → afternoon → evening → night).
+* Vivid second-person prose, 4-8 sentences per scene.
+* End every turn with 4-6 numbered action choices for the player.
+* Progress time naturally (morning → noon → afternoon → evening → night).
 
 ABILITY CHECKS & SAVES
-• Set a DC (8 easy / 12 moderate / 16 hard / 20 very hard / 25 nearly impossible).
-• Roll: d20 + relevant ability modifier + proficiency bonus (if proficient).
-• Proficiency bonus is shown in the stat block. Skills marked in the Skills line get +prof.
-• Advantage = roll twice take higher. Disadvantage = roll twice take lower.
+* Set a DC (8 easy / 12 moderate / 16 hard / 20 very hard / 25 nearly impossible).
+* Roll: d20 + relevant ability modifier + proficiency bonus (if proficient).
+* Proficiency bonus is shown in the stat block. Skills marked in the Skills line get +prof.
+* Advantage = roll twice take higher. Disadvantage = roll twice take lower.
 
 COMBAT
-• Initiative: d20 + DEX modifier — describe turn order.
-• Attack roll: d20 + ability mod + prof bonus (if proficient) vs. target AC.
-• Damage: weapon die + ability modifier.
-• Natural 20 = critical hit: roll damage dice twice, add mods once.
-• 0 HP → unconscious, death saving throws (3 successes = stable, 3 fails = dead).
-• Unconscious characters get advantage on death saves when a creature is within 5ft.
+* Initiative: d20 + DEX modifier  -  describe turn order.
+* Attack roll: d20 + ability mod + prof bonus (if proficient) vs. target AC.
+* Damage: weapon die + ability modifier.
+* Natural 20 = critical hit: roll damage dice twice, add mods once.
+* 0 HP → unconscious, death saving throws (3 successes = stable, 3 fails = dead).
+* Unconscious characters get advantage on death saves when a creature is within 5ft.
 
 SPELLCASTING
-• Use_spell_slot events when a spell slot is expended.
-• Concentration spells break on taking damage unless a CON save is passed (DC 10 or half damage).
-• Warlock pact slots recharge on short rest; all other slots on long rest.
+* Use_spell_slot events when a spell slot is expended.
+* Concentration spells break on taking damage unless a CON save is passed (DC 10 or half damage).
+* Warlock pact slots recharge on short rest; all other slots on long rest.
 
 RESTING
-• Short rest (1 hr): spend Hit Dice to heal (HD + CON mod per die).
+* Short rest (1 hr): spend Hit Dice to heal (HD + CON mod per die).
   Emit: { "type": "short_rest", "hitDiceSpent": N }
-• Long rest (8 hrs): full HP and spell slot recovery.
+* Long rest (8 hrs): full HP and spell slot recovery.
   Emit: { "type": "long_rest" }
 
 ENCOUNTERS & LOOT
 The stat block includes a WORLD ID. Use it to pull from the encounter tables
 already loaded in this module. When describing a combat encounter:
-• Use the monster's AC and HP values provided — do not invent them.
-• Match the CR band to the player's level (low ≤ 2, mid 3–4, high 5+).
-• After defeating an encounter, award loot by tier:
+* Use the monster's AC and HP values provided  -  do not invent them.
+* Match the CR band to the player's level (low <= 2, mid 3-4, high 5+).
+* After defeating an encounter, award loot by tier:
     trivial/low → gold coins only
     mid encounter → gold + roll for 1 common item
     hard/boss → gold + uncommon item
     rare/legendary → gold + rare item
   Emit item_add for any magic item awarded.
-• XP per monster is roughly: CR×200 (CR 0 = 10xp, CR ¼ = 50xp, CR ½ = 100xp).
+* XP per monster is roughly: CR×200 (CR 0 = 10xp, CR ¼ = 50xp, CR ½ = 100xp).
 
-EVENT BLOCKS — emit AFTER narrative, only include events that occurred:
+EVENT BLOCKS  -  emit AFTER narrative, only include events that occurred:
 \`\`\`game
 [
   { "type": "xp_gain",          "amount": 75 },
@@ -908,7 +908,7 @@ let _hudInterval = null;
 function buildHudHtml(state) {
     if (!state || !state.player) {
         return `<div style="color:#888;font-style:italic;padding:8px;">
-            Waiting for game to start…
+            Waiting for game to start...
         </div>`;
     }
 
@@ -938,7 +938,7 @@ function buildHudHtml(state) {
         : `<div style="color:#555;font-style:italic;font-size:12px;">No active quests</div>`;
 
     const invHtml = (state.inventory || []).length
-        ? (state.inventory || []).map(i => `<div style="font-size:12px;color:#ccc;padding:1px 0;">• ${i}</div>`).join('')
+        ? (state.inventory || []).map(i => `<div style="font-size:12px;color:#ccc;padding:1px 0;">* ${i}</div>`).join('')
         : `<div style="color:#555;font-style:italic;font-size:12px;">Empty</div>`;
 
     const condHtml = (state.conditions || []).length
@@ -976,8 +976,8 @@ function buildHudHtml(state) {
   </div>
   ${worldLine}
   <div style="font-size:12px;color:#aaa;margin-bottom:8px;">
-    ${p.race ? p.race.charAt(0).toUpperCase()+p.race.slice(1) : '—'}
-    ${p.class ? p.class.charAt(0).toUpperCase()+p.class.slice(1) : '—'}
+    ${p.race ? p.race.charAt(0).toUpperCase()+p.race.slice(1) : ' - '}
+    ${p.class ? p.class.charAt(0).toUpperCase()+p.class.slice(1) : ' - '}
     · Level ${p.level} · Prof +${prof}
   </div>
 
@@ -1022,6 +1022,8 @@ function buildHudHtml(state) {
 const SimpleLore = {
     name:    'Simple Lore',
     version: VERSION,
+    updateUrl:  'https://raw.githubusercontent.com/cgstever/simple-lore/main/lore.js',
+    versionUrl: 'https://raw.githubusercontent.com/cgstever/simple-lore/main/version.json',
 
     init(data) {
         console.log(`[SimpleLore] v${VERSION} loaded`);
@@ -1055,7 +1057,7 @@ const SimpleLore = {
         if (state.charCreation) {
             systemPrompt = CREATION_PROMPT;
         } else if (state.flags.freshStart) {
-            // First turn after char gen — set the opening scene
+            // First turn after char gen  -  set the opening scene
             state.flags.freshStart = false;
             systemPrompt = buildStatBlock(state) + '\n\n'
                          + GM_RULES + '\n\n'
