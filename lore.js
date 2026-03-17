@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -371,6 +371,8 @@ function applyEvent(state, ev) {
 
         case 'creation_complete':
             state.charCreation = null;
+            state.flags.world  = pickWorld();
+            state.flags.freshStart = true;
             break;
 
         // ── Core Stats ──────────────────────────────────────────────────────
@@ -530,6 +532,103 @@ function checkLevelUp(state) {
     return { from: oldLevel, to: newLevel, hpGain };
 }
 
+// ── World Table ───────────────────────────────────────────────────────────────
+//
+// Each entry defines a region with a named starting town and its tavern.
+// Randomly selected at creation_complete and stored in state.flags.world.
+// The GM is given this as the anchor for the opening scene.
+
+const WORLDS = [
+    {
+        id: 'thornvale',
+        region: 'The Thornwood Marches',
+        regionDesc: 'a vast, mist-choked forest of black thorns and ancient ruins, where fey spirits and worse things stir at night',
+        town: 'Thornvale',
+        townDesc: 'a fortified logging settlement carved out of the forest edge, its timber walls patched and re-patched after decades of raids',
+        tavern: 'The Split Log',
+        tavernDesc: 'low-ceilinged and smoky, smelling of pine resin and cheap ale, favoured by loggers and frontier trappers',
+        hooks: [
+            'Missing loggers — men have been vanishing in the deep wood for weeks',
+            'A fey bargain gone wrong — a farmer\'s daughter was taken as payment for a debt her grandfather forgot',
+            'Ruins sighted — a scout returned with rubble carved in no known script and died three days later',
+        ],
+    },
+    {
+        id: 'saltmere',
+        region: 'The Salthallow Coast',
+        regionDesc: 'a jagged coastline of sea stacks, hidden coves, and tidal caves — smuggler country, where the crown\'s writ barely reaches',
+        town: 'Saltmere',
+        townDesc: 'a fishing town built on stilts above a tidal flat, its harbour perpetually crowded with boats whose captains ask no questions',
+        tavern: 'The Drowned Anchor',
+        tavernDesc: 'a raucous dockside tavern built into a converted warehouse, its walls hung with salvaged figureheads and nets',
+        hooks: [
+            'A merchant vessel ran aground — its cargo was intact but every soul aboard was gone',
+            'Tidal caves — locals whisper of lights beneath the water and a voice that calls names',
+            'Smuggler war — two crews are about to spill blood over a shipment nobody will describe',
+        ],
+    },
+    {
+        id: 'ashford',
+        region: 'The Cinder Plains',
+        regionDesc: 'a scorched expanse of volcanic rock and ash fields stretching between two mountain ranges, dotted with obsidian spires and the bones of dead dragons',
+        town: 'Ashford',
+        townDesc: 'a mining boomtown built around a rich vein of bloodstone, its streets choked with fortune-seekers and the company guards who watch them',
+        tavern: 'The Ember & Tongs',
+        tavernDesc: 'a broad miners\' hall that doubles as a forge waiting room, its tables carved with the names of those who struck it rich — and those who didn\'t',
+        hooks: [
+            'The deep vein — miners broke into a sealed chamber and something sealed it from the inside for a reason',
+            'Company trouble — the Bloodstone Company is overworking its conscripted labour and someone needs to know',
+            'Dragon bones — a collector is paying absurd sums for intact dragon teeth, which has sent fools into the wastes',
+        ],
+    },
+    {
+        id: 'highmark',
+        region: 'The Greymount Highlands',
+        regionDesc: 'a highland expanse of windswept moors, cairn-dotted ridgelines, and deep glacial valleys where old kingdoms lie buried under the peat',
+        town: 'Highmark',
+        townDesc: 'a crossroads town at the summit of the only reliable pass through the mountains, its economy built entirely on toll revenue and traveller hospitality',
+        tavern: 'The Wayward Ram',
+        tavernDesc: 'a broad highland inn with a roaring central hearth, its common room full of merchants, pilgrims, and soldiers all waiting for the same weather to pass',
+        hooks: [
+            'The pass is closing — an early blizzard is coming and a caravan is three days overdue',
+            'Cairn walkers — the ancient burial mounds have been disturbed and the dead are not resting',
+            'A noble\'s ransom — a young lord was taken off the road and his family is too proud to involve the crown',
+        ],
+    },
+    {
+        id: 'dunmere',
+        region: 'The Dunwater Fens',
+        regionDesc: 'a vast wetland of shallow lakes, reed beds, and floating peat islands that shift season to season — maps are useless here',
+        town: 'Dunmere',
+        townDesc: 'a town built on a rare slab of solid ground above the fens, its houses connected by a web of rope bridges, its people deeply suspicious of outsiders',
+        tavern: 'The Bogwitch',
+        tavernDesc: 'a creaking, leaning tavern that smells of marsh gas and smoked eel, its landlady a retired hedge witch who charges double for anything after dark',
+        hooks: [
+            'The paths are moving — the fen routes that locals have used for generations no longer lead where they should',
+            'Will-o-wisps — travellers are being led into the deep fens and not returning; the wisps have never been this bold',
+            'An old shrine — a half-submerged temple has surfaced after a dry season and factions are already fighting over it',
+        ],
+    },
+    {
+        id: 'ironcross',
+        region: 'The Iron Steppe',
+        regionDesc: 'a vast flat grassland of red iron-rich soil where nomadic clans ride in circles around the few permanent settlements, and the wind never stops',
+        town: 'Ironcross',
+        townDesc: 'a walled trade post at the intersection of two ancient steppe roads, its population a volatile mix of settlers, clan traders, and imperial garrison soldiers',
+        tavern: 'The Red Stirrup',
+        tavernDesc: 'a wide-open travellers\' hall built for high volume, its walls decorated with clan banners and its staff armed and unimpressed',
+        hooks: [
+            'Clan war brewing — two steppe clans are feuding over grazing rights and both have approached the garrison for support',
+            'The iron sickness — a blight is killing horses across three clans\' territories and nobody knows its source',
+            'A sealed vault — an imperial survey team found a pre-empire structure buried in the steppe and promptly disappeared',
+        ],
+    },
+];
+
+function pickWorld() {
+    return WORLDS[Math.floor(Math.random() * WORLDS.length)];
+}
+
 // ── System Prompts ─────────────────────────────────────────────────────────────
 
 const CREATION_PROMPT = `
@@ -569,13 +668,57 @@ Choose 2 class-appropriate starting skill proficiencies and include them.
 ━━ STEP 4 — NAME ━━
 Ask for the character's name (and optionally a brief backstory hook).
   { "type": "rename", "name": "Lyra Ashveil" }
-Then emit creation_complete and give the player starting equipment
-(emit item_add events) and a starting quest (quest_add).
 
-Do NOT start the adventure until all four steps are done.
+Then emit, in order:
+1. creation_complete
+2. item_add events for class-appropriate starting gear (weapon, armor if any,
+   adventuring supplies). Use realistic 5e starting equipment for the class.
+   Examples — Fighter: longsword, shield, chain mail, 5x javelins, explorer's pack
+              Wizard: quarterstaff, spellbook, component pouch, scholar's pack, 10gp
+              Rogue: shortsword, shortbow + 20 arrows, leather armor, thieves' tools, burglar's pack
+3. gold_change for starting gold appropriate to the class (PHB starting wealth)
+4. A quest_add for the first hook — keep it vague, just enough to motivate leaving the tavern
+
+Do NOT start the adventure or describe any scene yet. That happens next turn.
 `.trim();
 
-const GM_RULES = `
+function buildOpeningPrompt(state) {
+    const w = state.flags.world;
+    const p = state.player;
+    const hook = w.hooks[Math.floor(Math.random() * w.hooks.length)];
+
+    // Store the chosen hook so it stays consistent after this turn
+    if (!state.flags.openingHook) state.flags.openingHook = hook;
+    const usedHook = state.flags.openingHook;
+
+    return `
+━━ OPENING SCENE ━━
+The adventure begins NOW. Do not do any more character creation.
+
+WORLD: ${w.region}
+${w.regionDesc}.
+
+TOWN: ${w.town}
+${w.townDesc}.
+
+TAVERN: ${w.tavern}
+${w.tavernDesc}.
+
+CHARACTER: ${p.name}, a level ${p.level} ${p.race} ${p.class ? p.class.charAt(0).toUpperCase() + p.class.slice(1) : ''}.
+
+OPENING HOOK (the rumour already in the air when the player sits down):
+${usedHook}
+
+YOUR JOB THIS TURN:
+• Set the scene inside ${w.tavern} in vivid second-person prose (4–8 sentences).
+• Establish the atmosphere, a few notable NPCs present, and the ambient mood.
+• Weave in the hook naturally — overheard conversation, a notice board, a stranger's muttered warning.
+• End with 4–6 numbered action choices for the player.
+• Do NOT resolve anything yet. This is the opening scene only.
+`.trim();
+}
+
+
 You are the Game Master for a D&D 5e text-based RPG.
 The player stat block above reflects the current game state exactly.
 
@@ -656,6 +799,12 @@ const SimpleLore = {
 
         if (state.charCreation) {
             systemPrompt = CREATION_PROMPT;
+        } else if (state.flags.freshStart) {
+            // First turn after char gen — set the opening scene
+            state.flags.freshStart = false;
+            systemPrompt = buildStatBlock(state) + '\n\n'
+                         + GM_RULES + '\n\n'
+                         + buildOpeningPrompt(state);
         } else {
             systemPrompt = buildStatBlock(state) + '\n\n' + GM_RULES;
             if (levelUp) {
