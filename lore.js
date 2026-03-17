@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -301,7 +301,7 @@ function buildStatBlock(state) {
         lines.push(`  Completed: ${doneQ.map(q => q.title).join(', ')}`);
     }
 
-    lines.push(`══ Turn ${state.turn} ══`);
+    lines.push(`══ Turn ${state.turn}  |  World: ${state.flags.world?.id || 'unknown'} ══`);
     return lines.join('\n');
 }
 
@@ -532,6 +532,113 @@ function checkLevelUp(state) {
     return { from: oldLevel, to: newLevel, hpGain };
 }
 
+// ── Encounter Tables (Open5e SRD, CC-BY 4.0) ─────────────────────────────────
+// Monsters per biome, in three CR bands:
+//   low  = CR 1/8–1  (levels 1–2)   mid = CR 2–3 (levels 3–4)   high = CR 4–5 (levels 5+)
+// AC and HP are included so the GM can run combat accurately.
+
+const ENCOUNTERS = {
+    thornvale: {
+        low:  [{ name: 'Bandit', cr: 0.125, ac: 12, hp: 11 }, { name: 'Blood Hawk', cr: 0.125, ac: 12, hp: 7 }, { name: 'Cultist', cr: 0.125, ac: 12, hp: 9 }, { name: 'Flying Snake', cr: 0.125, ac: 14, hp: 5 }, { name: 'Giant Rat', cr: 0.125, ac: 12, hp: 7 }, { name: 'Giant Weasel', cr: 0.125, ac: 13, hp: 9 }, { name: 'Guard', cr: 0.125, ac: 16, hp: 11 }, { name: 'Kobold', cr: 0.125, ac: 12, hp: 5 }, { name: 'Mastiff', cr: 0.125, ac: 12, hp: 5 }, { name: 'Stirge', cr: 0.125, ac: 14, hp: 2 }],
+        mid:  [{ name: 'Ankheg', cr: 2.0, ac: 14, hp: 39 }, { name: 'Awakened Tree', cr: 2.0, ac: 13, hp: 59 }, { name: 'Bandit Captain', cr: 2.0, ac: 15, hp: 65 }, { name: 'Berserker', cr: 2.0, ac: 13, hp: 67 }, { name: 'Black Dragon Wyrmling', cr: 2.0, ac: 17, hp: 33 }, { name: 'Centaur', cr: 2.0, ac: 12, hp: 45 }, { name: 'Cult Fanatic', cr: 2.0, ac: 13, hp: 22 }, { name: 'Druid', cr: 2.0, ac: 11, hp: 27 }],
+        high: [{ name: 'Black Pudding', cr: 4.0, ac: 7, hp: 85 }, { name: 'Couatl', cr: 4.0, ac: 19, hp: 97 }, { name: 'Ettin', cr: 4.0, ac: 12, hp: 85 }, { name: 'Ghost', cr: 4.0, ac: 11, hp: 45 }, { name: 'Wereboar', cr: 4.0, ac: 10, hp: 78 }, { name: 'Weretiger', cr: 4.0, ac: 12, hp: 120 }],
+    },
+    saltmere: {
+        low:  [{ name: 'Bandit', cr: 0.125, ac: 12, hp: 11 }, { name: 'Blood Hawk', cr: 0.125, ac: 12, hp: 7 }, { name: 'Cultist', cr: 0.125, ac: 12, hp: 9 }, { name: 'Flying Snake', cr: 0.125, ac: 14, hp: 5 }, { name: 'Giant Crab', cr: 0.125, ac: 15, hp: 13 }, { name: 'Giant Rat', cr: 0.125, ac: 12, hp: 7 }, { name: 'Guard', cr: 0.125, ac: 16, hp: 11 }, { name: 'Kobold', cr: 0.125, ac: 12, hp: 5 }, { name: 'Merfolk', cr: 0.125, ac: 11, hp: 11 }, { name: 'Stirge', cr: 0.125, ac: 14, hp: 2 }],
+        mid:  [{ name: 'Bandit Captain', cr: 2.0, ac: 15, hp: 65 }, { name: 'Berserker', cr: 2.0, ac: 13, hp: 67 }, { name: 'Bronze Dragon Wyrmling', cr: 2.0, ac: 17, hp: 32 }, { name: 'Cult Fanatic', cr: 2.0, ac: 13, hp: 22 }, { name: 'Gargoyle', cr: 2.0, ac: 15, hp: 52 }, { name: 'Gelatinous Cube', cr: 2.0, ac: 6, hp: 84 }, { name: 'Ghast', cr: 2.0, ac: 13, hp: 36 }, { name: 'Sea Hag', cr: 2.0, ac: 14, hp: 52 }],
+        high: [{ name: 'Black Pudding', cr: 4.0, ac: 7, hp: 85 }, { name: 'Chuul', cr: 4.0, ac: 16, hp: 93 }, { name: 'Ghost', cr: 4.0, ac: 11, hp: 45 }, { name: 'Sahuagin Baron', cr: 5.0, ac: 16, hp: 76 }, { name: 'Giant Crocodile', cr: 5.0, ac: 14, hp: 85 }, { name: 'Giant Shark', cr: 5.0, ac: 13, hp: 126 }],
+    },
+    ashford: {
+        low:  [{ name: 'Bandit', cr: 0.125, ac: 12, hp: 11 }, { name: 'Blood Hawk', cr: 0.125, ac: 12, hp: 7 }, { name: 'Camel', cr: 0.125, ac: 9, hp: 15 }, { name: 'Cultist', cr: 0.125, ac: 12, hp: 9 }, { name: 'Flying Snake', cr: 0.125, ac: 14, hp: 5 }, { name: 'Giant Crab', cr: 0.125, ac: 15, hp: 13 }, { name: 'Giant Rat', cr: 0.125, ac: 12, hp: 7 }, { name: 'Guard', cr: 0.125, ac: 16, hp: 11 }, { name: 'Kobold', cr: 0.125, ac: 12, hp: 5 }, { name: 'Stirge', cr: 0.125, ac: 14, hp: 2 }],
+        mid:  [{ name: 'Azer', cr: 2.0, ac: 17, hp: 39 }, { name: 'Bandit Captain', cr: 2.0, ac: 15, hp: 65 }, { name: 'Berserker', cr: 2.0, ac: 13, hp: 67 }, { name: 'Gargoyle', cr: 2.0, ac: 15, hp: 52 }, { name: 'Gelatinous Cube', cr: 2.0, ac: 6, hp: 84 }, { name: 'Ghast', cr: 2.0, ac: 13, hp: 36 }, { name: 'Grick', cr: 2.0, ac: 14, hp: 27 }, { name: 'Ogre', cr: 2.0, ac: 11, hp: 59 }],
+        high: [{ name: 'Black Pudding', cr: 4.0, ac: 7, hp: 85 }, { name: 'Chuul', cr: 4.0, ac: 16, hp: 93 }, { name: 'Ettin', cr: 4.0, ac: 12, hp: 85 }, { name: 'Ghost', cr: 4.0, ac: 11, hp: 45 }, { name: 'Air Elemental', cr: 5.0, ac: 15, hp: 90 }, { name: 'Earth Elemental', cr: 5.0, ac: 17, hp: 126 }],
+    },
+    highmark: {
+        low:  [{ name: 'Bandit', cr: 0.125, ac: 12, hp: 11 }, { name: 'Blood Hawk', cr: 0.125, ac: 12, hp: 7 }, { name: 'Cultist', cr: 0.125, ac: 12, hp: 9 }, { name: 'Giant Weasel', cr: 0.125, ac: 13, hp: 9 }, { name: 'Guard', cr: 0.125, ac: 16, hp: 11 }, { name: 'Kobold', cr: 0.125, ac: 12, hp: 5 }, { name: 'Mastiff', cr: 0.125, ac: 12, hp: 5 }, { name: 'Noble', cr: 0.125, ac: 15, hp: 9 }, { name: 'Stirge', cr: 0.125, ac: 14, hp: 2 }, { name: 'Tribal Warrior', cr: 0.125, ac: 12, hp: 11 }],
+        mid:  [{ name: 'Bandit Captain', cr: 2.0, ac: 15, hp: 65 }, { name: 'Berserker', cr: 2.0, ac: 13, hp: 67 }, { name: 'Druid', cr: 2.0, ac: 11, hp: 27 }, { name: 'Gargoyle', cr: 2.0, ac: 15, hp: 52 }, { name: 'Ghast', cr: 2.0, ac: 13, hp: 36 }, { name: 'Giant Boar', cr: 2.0, ac: 12, hp: 42 }, { name: 'Ogre', cr: 2.0, ac: 11, hp: 59 }, { name: 'Worg', cr: 0.5, ac: 13, hp: 26 }],
+        high: [{ name: 'Ettin', cr: 4.0, ac: 12, hp: 85 }, { name: 'Ghost', cr: 4.0, ac: 11, hp: 45 }, { name: 'Lamia', cr: 4.0, ac: 13, hp: 97 }, { name: 'Wereboar', cr: 4.0, ac: 10, hp: 78 }, { name: 'Air Elemental', cr: 5.0, ac: 15, hp: 90 }, { name: 'Bulette', cr: 5.0, ac: 17, hp: 94 }],
+    },
+    dunmere: {
+        low:  [{ name: 'Bandit', cr: 0.125, ac: 12, hp: 11 }, { name: 'Blood Hawk', cr: 0.125, ac: 12, hp: 7 }, { name: 'Cultist', cr: 0.125, ac: 12, hp: 9 }, { name: 'Flying Snake', cr: 0.125, ac: 14, hp: 5 }, { name: 'Giant Crab', cr: 0.125, ac: 15, hp: 13 }, { name: 'Giant Rat', cr: 0.125, ac: 12, hp: 7 }, { name: 'Giant Rat (Diseased)', cr: 0.125, ac: 12, hp: 7 }, { name: 'Giant Weasel', cr: 0.125, ac: 13, hp: 9 }, { name: 'Kobold', cr: 0.125, ac: 12, hp: 5 }, { name: 'Stirge', cr: 0.125, ac: 14, hp: 2 }],
+        mid:  [{ name: 'Ankheg', cr: 2.0, ac: 14, hp: 39 }, { name: 'Awakened Tree', cr: 2.0, ac: 13, hp: 59 }, { name: 'Bandit Captain', cr: 2.0, ac: 15, hp: 65 }, { name: 'Black Dragon Wyrmling', cr: 2.0, ac: 17, hp: 33 }, { name: 'Centaur', cr: 2.0, ac: 12, hp: 45 }, { name: 'Cult Fanatic', cr: 2.0, ac: 13, hp: 22 }, { name: 'Druid', cr: 2.0, ac: 11, hp: 27 }, { name: 'Will-o-Wisp', cr: 2.0, ac: 19, hp: 22 }],
+        high: [{ name: 'Couatl', cr: 4.0, ac: 19, hp: 97 }, { name: 'Ghost', cr: 4.0, ac: 11, hp: 45 }, { name: 'Green Hag', cr: 3.0, ac: 14, hp: 82 }, { name: 'Wereboar', cr: 4.0, ac: 10, hp: 78 }, { name: 'Weretiger', cr: 4.0, ac: 12, hp: 120 }, { name: 'Bulette', cr: 5.0, ac: 17, hp: 94 }],
+    },
+    ironcross: {
+        low:  [{ name: 'Bandit', cr: 0.125, ac: 12, hp: 11 }, { name: 'Blood Hawk', cr: 0.125, ac: 12, hp: 7 }, { name: 'Camel', cr: 0.125, ac: 9, hp: 15 }, { name: 'Cultist', cr: 0.125, ac: 12, hp: 9 }, { name: 'Flying Snake', cr: 0.125, ac: 14, hp: 5 }, { name: 'Giant Rat', cr: 0.125, ac: 12, hp: 7 }, { name: 'Giant Weasel', cr: 0.125, ac: 13, hp: 9 }, { name: 'Guard', cr: 0.125, ac: 16, hp: 11 }, { name: 'Kobold', cr: 0.125, ac: 12, hp: 5 }, { name: 'Tribal Warrior', cr: 0.125, ac: 12, hp: 11 }],
+        mid:  [{ name: 'Ankheg', cr: 2.0, ac: 14, hp: 39 }, { name: 'Bandit Captain', cr: 2.0, ac: 15, hp: 65 }, { name: 'Berserker', cr: 2.0, ac: 13, hp: 67 }, { name: 'Centaur', cr: 2.0, ac: 12, hp: 45 }, { name: 'Cult Fanatic', cr: 2.0, ac: 13, hp: 22 }, { name: 'Ghast', cr: 2.0, ac: 13, hp: 36 }, { name: 'Ogre', cr: 2.0, ac: 11, hp: 59 }, { name: 'Worg', cr: 0.5, ac: 13, hp: 26 }],
+        high: [{ name: 'Couatl', cr: 4.0, ac: 19, hp: 97 }, { name: 'Elephant', cr: 4.0, ac: 12, hp: 76 }, { name: 'Ettin', cr: 4.0, ac: 12, hp: 85 }, { name: 'Ghost', cr: 4.0, ac: 11, hp: 45 }, { name: 'Lamia', cr: 4.0, ac: 13, hp: 97 }, { name: 'Gladiator', cr: 5.0, ac: 16, hp: 112 }],
+    },
+};
+
+// ── Loot Tables (Open5e SRD, CC-BY 4.0) ──────────────────────────────────────
+// Tiered by rarity. GM picks tier based on encounter difficulty:
+//   low encounter → common   mid → uncommon   high/boss → rare
+
+const LOOT = {
+    common: [
+        'Bag of Tricks','Boots of False Tracks','Candle of the Deep',
+        'Cloak of Billowing','Cloak of Many Fashions','Driftglobe',
+        'Ear Horn of Hearing','Enduring Spellbook','Hat of Vermin',
+        "Heward's Handy Spice Pouch",'Horn of Silent Alarm',
+        'Instrument of Illusions','Mystery Key','Pipe of Smoke Monsters',
+        'Pole of Collapsing','Rope of Mending','Talking Doll',
+        'Wand of Conducting','Wand of Pyrotechnics',
+    ],
+    uncommon: [
+        'Adamantine Armor','Ammunition +1','Amulet of Proof against Detection and Location',
+        'Bag of Holding','Boots of Elvenkind','Boots of Striding and Springing',
+        'Bracers of Archery','Brooch of Shielding','Broom of Flying',
+        'Cloak of Elvenkind','Cloak of Protection','Eyes of Charming',
+        'Gauntlets of Ogre Power','Goggles of Night','Hat of Disguise',
+        'Headband of Intellect','Helm of Comprehending Languages','Immovable Rod',
+        'Lantern of Revealing','Mithral Armor','Necklace of Adaptation',
+        'Pearl of Power','Ring of Jumping','Ring of Mind Shielding',
+        'Ring of Swimming','Ring of Warmth','Ring of Water Walking',
+        'Rope of Climbing','Sending Stones','Shield +1',
+        'Slippers of Spider Climbing','Wand of Magic Missiles',
+        'Wand of Secrets','Weapon +1','Wind Fan',
+    ],
+    rare: [
+        'Amulet of Health','Belt of Giant Strength (Hill)','Boots of Levitation',
+        'Boots of Speed','Bracers of Defense','Carpet of Flying',
+        'Cloak of Displacement','Cloak of the Bat','Cube of Force',
+        "Daern's Instant Fortress",'Dagger of Venom','Dragon Scale Mail',
+        'Dragon Slayer','Elven Chain','Flame Tongue','Folding Boat',
+        'Gem of Seeing','Giant Slayer','Glamoured Studded Leather',
+        'Helm of Teleportation','Horn of Blasting','Ioun Stone',
+        'Mace of Disruption','Mace of Terror','Necklace of Fireballs',
+        'Ring of Animal Influence','Ring of Evasion','Ring of Feather Falling',
+        'Ring of Free Action','Ring of Protection','Ring of Spell Storing',
+        'Ring of X-ray Vision','Robe of Eyes','Rod of Rulership',
+        'Rope of Entanglement','Shield +2','Staff of Charming',
+        'Staff of Healing','Staff of the Woodlands','Sun Blade',
+        'Sword +2','Sword of Life Stealing','Trident of Fish Command',
+        'Wand of Fireballs','Wand of Lightning Bolts','Wand of Wonder',
+        'Wings of Flying',
+    ],
+};
+
+// Pick a level-appropriate random encounter for the current world
+function pickEncounter(worldId, playerLevel) {
+    const table = ENCOUNTERS[worldId];
+    if (!table) return null;
+    const band = playerLevel <= 2 ? 'low' : playerLevel <= 4 ? 'mid' : 'high';
+    const pool = table[band];
+    return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// Pick N unique loot items from a rarity tier
+function pickLoot(rarity, count = 1) {
+    const pool = LOOT[rarity] || LOOT.common;
+    const used = new Set();
+    const out  = [];
+    while (out.length < count && out.length < pool.length) {
+        const item = pool[Math.floor(Math.random() * pool.length)];
+        if (!used.has(item)) { used.add(item); out.push(item); }
+    }
+    return out;
+}
+
 // ── World Table ───────────────────────────────────────────────────────────────
 //
 // Each entry defines a region with a named starting town and its tavern.
@@ -752,8 +859,18 @@ RESTING
 • Long rest (8 hrs): full HP and spell slot recovery.
   Emit: { "type": "long_rest" }
 
-ECONOMY
-Use gold (gp), silver (sp), copper (cp). 1gp = 10sp = 100cp.
+ENCOUNTERS & LOOT
+The stat block includes a WORLD ID. Use it to pull from the encounter tables
+already loaded in this module. When describing a combat encounter:
+• Use the monster's AC and HP values provided — do not invent them.
+• Match the CR band to the player's level (low ≤ 2, mid 3–4, high 5+).
+• After defeating an encounter, award loot by tier:
+    trivial/low → gold coins only
+    mid encounter → gold + roll for 1 common item
+    hard/boss → gold + uncommon item
+    rare/legendary → gold + rare item
+  Emit item_add for any magic item awarded.
+• XP per monster is roughly: CR×200 (CR 0 = 10xp, CR ¼ = 50xp, CR ½ = 100xp).
 
 EVENT BLOCKS — emit AFTER narrative, only include events that occurred:
 \`\`\`game
