@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.7.0';
+const VERSION = '1.7.1';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -202,6 +202,9 @@ function defaultState() {
         quests:     [],
         conditions: [],
         spellSlots: null,
+        equipped:   null,   // main hand weapon name
+        offhand:    null,   // off hand weapon or shield
+        armor:      null,   // armor name for display
         flags:      {},
         turn:       0,
         charCreation: { step: 'intro' },
@@ -456,6 +459,20 @@ function applyEvent(state, ev) {
             state.flags.armorBonus = Number(ev.ac) || 10;
             state.flags.armorType  = ev.armorType || 'none';
             if (ev.shield != null) state.flags.shield = Boolean(ev.shield);
+            if (ev.name) state.armor = ev.name;
+            break;
+
+        case 'equip_weapon':
+            if (ev.slot === 'offhand') {
+                state.offhand = ev.weapon || null;
+            } else {
+                state.equipped = ev.weapon || null;
+            }
+            break;
+
+        case 'unequip_weapon':
+            if (ev.slot === 'offhand') state.offhand = null;
+            else state.equipped = null;
             break;
 
         // ── Spells ──────────────────────────────────────────────────────────
@@ -618,6 +635,72 @@ const LOOT = {
     ],
 };
 
+
+
+// ── Weapon Table (Open5e SRD v2, CC-BY 4.0) ──────────────────────────────────
+// stat: 'str' = STR mod, 'dex' = DEX mod, 'best' = higher of STR/DEX (finesse)
+// Attack roll: d20 + stat_mod + prof_bonus (if proficient) vs target AC
+// Damage:      weapon_dice + stat_mod
+
+const WEAPONS = {
+    'Club':           { dice: '1d4',  type: 'Bludgeoning', simple: true,  range: 0,   stat: 'str',  props: ['Light'] },
+    'Dagger':         { dice: '1d4',  type: 'Piercing',    simple: true,  range: 20,  stat: 'best', props: ['Finesse','Light','Thrown 20/60'] },
+    'Greatclub':      { dice: '1d8',  type: 'Bludgeoning', simple: true,  range: 0,   stat: 'str',  props: ['Two-Handed'] },
+    'Handaxe':        { dice: '1d6',  type: 'Slashing',    simple: true,  range: 20,  stat: 'dex',  props: ['Light','Thrown 20/60'] },
+    'Javelin':        { dice: '1d6',  type: 'Piercing',    simple: true,  range: 30,  stat: 'dex',  props: ['Thrown 30/120'] },
+    'Light Hammer':   { dice: '1d4',  type: 'Bludgeoning', simple: true,  range: 20,  stat: 'dex',  props: ['Light','Thrown 20/60'] },
+    'Mace':           { dice: '1d6',  type: 'Bludgeoning', simple: true,  range: 0,   stat: 'str',  props: [] },
+    'Quarterstaff':   { dice: '1d6',  type: 'Bludgeoning', simple: true,  range: 0,   stat: 'str',  props: ['Versatile 1d8'] },
+    'Sickle':         { dice: '1d4',  type: 'Slashing',    simple: true,  range: 0,   stat: 'str',  props: ['Light'] },
+    'Spear':          { dice: '1d6',  type: 'Piercing',    simple: true,  range: 20,  stat: 'dex',  props: ['Thrown 20/60','Versatile 1d8'] },
+    'Light Crossbow': { dice: '1d8',  type: 'Piercing',    simple: true,  range: 80,  stat: 'dex',  props: ['Ammunition','Loading','Two-Handed'] },
+    'Shortbow':       { dice: '1d6',  type: 'Piercing',    simple: true,  range: 80,  stat: 'dex',  props: ['Ammunition','Two-Handed'] },
+    'Sling':          { dice: '1d4',  type: 'Bludgeoning', simple: true,  range: 30,  stat: 'dex',  props: ['Ammunition'] },
+    'Battleaxe':      { dice: '1d8',  type: 'Slashing',    simple: false, range: 0,   stat: 'str',  props: ['Versatile 1d10'] },
+    'Flail':          { dice: '1d8',  type: 'Bludgeoning', simple: false, range: 0,   stat: 'str',  props: [] },
+    'Glaive':         { dice: '1d10', type: 'Slashing',    simple: false, range: 0,   stat: 'str',  props: ['Heavy','Reach','Two-Handed'] },
+    'Greataxe':       { dice: '1d12', type: 'Slashing',    simple: false, range: 0,   stat: 'str',  props: ['Heavy','Two-Handed'] },
+    'Greatsword':     { dice: '2d6',  type: 'Slashing',    simple: false, range: 0,   stat: 'str',  props: ['Heavy','Two-Handed'] },
+    'Halberd':        { dice: '1d10', type: 'Slashing',    simple: false, range: 0,   stat: 'str',  props: ['Heavy','Reach','Two-Handed'] },
+    'Longsword':      { dice: '1d8',  type: 'Slashing',    simple: false, range: 0,   stat: 'str',  props: ['Versatile 1d10'] },
+    'Maul':           { dice: '2d6',  type: 'Bludgeoning', simple: false, range: 0,   stat: 'str',  props: ['Heavy','Two-Handed'] },
+    'Morningstar':    { dice: '1d8',  type: 'Piercing',    simple: false, range: 0,   stat: 'str',  props: [] },
+    'Pike':           { dice: '1d10', type: 'Piercing',    simple: false, range: 0,   stat: 'str',  props: ['Heavy','Reach','Two-Handed'] },
+    'Rapier':         { dice: '1d8',  type: 'Piercing',    simple: false, range: 0,   stat: 'best', props: ['Finesse'] },
+    'Scimitar':       { dice: '1d6',  type: 'Slashing',    simple: false, range: 0,   stat: 'best', props: ['Finesse','Light'] },
+    'Shortsword':     { dice: '1d6',  type: 'Piercing',    simple: false, range: 0,   stat: 'best', props: ['Finesse','Light'] },
+    'Trident':        { dice: '1d8',  type: 'Piercing',    simple: false, range: 20,  stat: 'dex',  props: ['Thrown 20/60','Versatile 1d10'] },
+    'War Pick':       { dice: '1d8',  type: 'Piercing',    simple: false, range: 0,   stat: 'str',  props: ['Versatile 1d10'] },
+    'Warhammer':      { dice: '1d8',  type: 'Bludgeoning', simple: false, range: 0,   stat: 'str',  props: ['Versatile 1d10'] },
+    'Whip':           { dice: '1d4',  type: 'Slashing',    simple: false, range: 0,   stat: 'best', props: ['Finesse','Reach'] },
+    'Hand Crossbow':  { dice: '1d6',  type: 'Piercing',    simple: false, range: 30,  stat: 'dex',  props: ['Ammunition','Light','Loading'] },
+    'Heavy Crossbow': { dice: '1d10', type: 'Piercing',    simple: false, range: 100, stat: 'dex',  props: ['Ammunition','Heavy','Loading','Two-Handed'] },
+    'Longbow':        { dice: '1d8',  type: 'Piercing',    simple: false, range: 150, stat: 'dex',  props: ['Ammunition','Heavy','Two-Handed'] },
+};
+
+// Get weapon stat modifier (handles finesse)
+function weaponStatMod(w, player) {
+    if (!w) return mod(player.str);
+    if (w.stat === 'best') return Math.max(mod(player.str), mod(player.dex));
+    if (w.stat === 'dex')  return mod(player.dex);
+    return mod(player.str);
+}
+
+// Build attack string for HUD display: "+5 to hit, 1d8+3 slashing"
+function weaponAttackStr(weaponName, player, proficient = true) {
+    const w = WEAPONS[weaponName];
+    if (!w) return null;
+    const sMod   = weaponStatMod(w, player);
+    const prof   = proficient ? pb(player.level) : 0;
+    const toHit  = sMod + prof;
+    const dmgMod = sMod;
+    return {
+        toHit:  sign(toHit),
+        damage: `${w.dice}${dmgMod >= 0 ? '+' : ''}${dmgMod} ${w.type}`,
+        props:  w.props,
+        range:  w.range,
+    };
+}
 
 // ── Spell Lists (Open5e SRD, CC-BY 4.0) ──────────────────────────────────────
 // Cantrips + L1 + L2 per caster class. Used for HUD display and GM reference.
@@ -899,6 +982,8 @@ ABILITY CHECKS & SAVES
 COMBAT
 * Initiative: d20 + DEX modifier  -  describe turn order.
 * Attack roll: d20 + ability mod + prof bonus (if proficient) vs. target AC.
+* Weapon stat: STR for most melee, DEX for ranged, best of STR/DEX for finesse weapons.
+* When a weapon is picked up or swapped, emit equip_weapon so the HUD stays accurate.
 * Damage: weapon die + ability modifier.
 * Natural 20 = critical hit: roll damage dice twice, add mods once.
 * 0 HP → unconscious, death saving throws (3 successes = stable, 3 fails = dead).
@@ -941,12 +1026,71 @@ EVENT BLOCKS  -  emit AFTER narrative, only include events that occurred:
   { "type": "quest_complete",   "title": "A New Beginning" },
   { "type": "condition_add",    "condition": "Poisoned" },
   { "type": "condition_remove", "condition": "Poisoned" },
-  { "type": "armor_change",     "ac": 16, "armorType": "medium", "shield": true },
+  { "type": "armor_change",     "ac": 16, "armorType": "medium", "shield": true, "name": "Chain Mail" },
+  { "type": "equip_weapon",     "weapon": "Longsword", "slot": "main" },
+  { "type": "equip_weapon",     "weapon": "Dagger", "slot": "offhand" },
   { "type": "flag_set",         "key": "knows_secret_passage", "value": true },
   { "type": "long_rest" }
 ]
 \`\`\`
 `.trim();
+
+function buildWeaponHtml(state) {
+    const p = state.player;
+    if (!p) return '';
+
+    const renderWeapon = (name, slot) => {
+        if (!name) {
+            return `<div style="font-size:12px;color:#555;font-style:italic;">${slot}: none</div>`;
+        }
+        const atk = weaponAttackStr(name, p, true);
+        if (!atk) {
+            // Unknown weapon (magic item, custom) — just show name
+            return `<div style="font-size:12px;color:#ccc;padding:2px 0;">
+                <span style="color:#ffb74d;">&#x2694;</span>
+                <b style="color:#ffe082;">${name}</b>
+                <span style="color:#666;font-size:10px;margin-left:4px;">${slot}</span>
+            </div>`;
+        }
+        const rangeStr = atk.range > 0 ? `<span style="color:#888;font-size:10px;margin-left:4px;">range ${atk.range}ft</span>` : '';
+        const propsStr = atk.props.length
+            ? `<div style="font-size:10px;color:#666;margin-left:12px;">${atk.props.join(' · ')}</div>`
+            : '';
+        return `<div style="padding:3px 0;border-bottom:1px solid #1a1a2e;">
+            <span style="color:#ffb74d;">&#x2694;</span>
+            <b style="color:#ffe082;margin-left:4px;">${name}</b>
+            <span style="color:#666;font-size:10px;margin-left:4px;">${slot}</span>
+            <div style="font-size:11px;color:#aaa;margin-left:12px;">
+                <span style="color:#ef9a9a;">${atk.toHit} to hit</span>
+                <span style="color:#555;margin:0 4px;">|</span>
+                <span style="color:#a5d6a7;">${atk.damage}</span>
+                ${rangeStr}
+            </div>
+            ${propsStr}
+        </div>`;
+    };
+
+    const offhandName = state.offhand;
+    const armorName   = state.armor;
+    const shield      = state.flags?.shield;
+
+    const offhandDisplay = shield
+        ? `<div style="font-size:12px;color:#90caf9;padding:2px 0;"><span style="color:#90caf9;">&#x1F6E1;</span> Shield (+2 AC)</div>`
+        : renderWeapon(offhandName, 'off-hand');
+
+    const armorDisplay = armorName
+        ? `<div style="font-size:12px;color:#90caf9;padding:2px 0;"><span>&#x1F455;</span> <b style="color:#90caf9;">${armorName}</b> <span style="color:#666;font-size:10px;">AC ${p.ac}</span></div>`
+        : '';
+
+    return `<details style="margin-top:6px;" open>
+    <summary style="cursor:pointer;font-size:12px;color:#888;">Equipment</summary>
+    <div style="margin-top:4px;">
+        ${renderWeapon(state.equipped, 'main hand')}
+        ${offhandDisplay}
+        ${armorDisplay}
+    </div>
+</details>`;
+}
 
 function buildSpellsHtml(state) {
     const cls = state.player?.class?.toLowerCase();
@@ -1192,6 +1336,8 @@ function buildHudHtml(state) {
   <div style="font-size:11px;color:#888;margin-bottom:2px;">Gold: ${goldStr} · Speed: ${p.speed}ft</div>
   ${condHtml ? `<div style="margin:4px 0;">${condHtml}</div>` : ''}
   ${slotHtml}
+
+  ${buildWeaponHtml(state)}
 
   <details style="margin-top:8px;">
     <summary style="cursor:pointer;font-size:12px;color:#888;">Inventory (${(state.inventory||[]).length})</summary>
