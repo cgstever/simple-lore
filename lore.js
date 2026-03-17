@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.5.4';
+const VERSION = '1.6.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -738,28 +738,34 @@ function pickWorld() {
 
 // ── System Prompts ─────────────────────────────────────────────────────────────
 
-const CREATION_PROMPT = `
+function buildCreationPrompt() {
+    // Roll real 4d6-drop-lowest using the dice integration
+    const scoreRolls = Array.from({ length: 6 }, () => roll4d6dropLowest());
+    const rollLines  = scoreRolls
+        .map((r, i) => `Roll ${i+1}: ${r.total}  (${r.rolls.join(',')} - dropped lowest, kept ${r.kept.join('+')})`)
+        .join('\n  ');
+
+    return (`
 You are the Game Master. The player is building their D&D 5e character.
 Complete ALL FOUR STEPS before starting the adventure.
 
 -- STEP 1  -  ABILITY SCORES --
-Simulate 4d6-drop-lowest six times. Present the results like:
-  Roll 1: 16   Roll 2: 14   Roll 3: 13   Roll 4: 12   Roll 5: 10   Roll 6: 8
+The dice have ALREADY been rolled using real 4d6-drop-lowest. Present these EXACT results:
+  ${rollLines}
 Ask the player to assign each roll to STR / DEX / CON / INT / WIS / CHA.
-Once assigned, emit set_scores wrapped in a fenced block like this — do NOT show the raw JSON in your reply, only emit it inside the fences:
+Once assigned, emit set_scores in a fenced block. Do NOT show raw JSON outside the fences:
 \`\`\`game
 { "type": "set_scores", "str": 12, "dex": 16, "con": 13, "int": 10, "wis": 14, "cha": 8 }
 \`\`\`
 
 -- STEP 2  -  RACE --
-Present these 15 options with bonuses and signature traits:
+Present these options with bonuses and signature traits:
   Human (+1 all), High Elf (+2 DEX +1 INT), Wood Elf (+2 DEX +1 WIS),
   Hill Dwarf (+2 CON +1 WIS), Mountain Dwarf (+2 CON +2 STR),
   Lightfoot Halfling (+2 DEX +1 CHA), Stout Halfling (+2 DEX +1 CON),
   Forest Gnome (+2 INT +1 DEX), Rock Gnome (+2 INT +1 CON),
   Tiefling (+2 CHA +1 INT), Dragonborn (+2 STR +1 CHA),
-  Half-Elf (+2 CHA +1 to two of your choice),
-  Half-Orc (+2 STR +1 CON), Aasimar (+2 CHA +1 WIS)
+  Half-Elf (+2 CHA +1 to two of your choice), Half-Orc (+2 STR +1 CON), Aasimar (+2 CHA +1 WIS)
 Once chosen, emit set_race inside fences. For half-elf, include bonusStat1 and bonusStat2:
 \`\`\`game
 { "type": "set_race", "race": "High Elf" }
@@ -767,12 +773,12 @@ Once chosen, emit set_race inside fences. For half-elf, include bonusStat1 and b
 
 -- STEP 3  -  CLASS --
 Present all 12 classes with hit dice and role flavour:
-  Barbarian (d12  -  primal warrior), Bard (d8  -  arcane performer),
-  Cleric (d8  -  divine champion), Druid (d8  -  nature mystic),
-  Fighter (d10  -  weapon master), Monk (d8  -  martial artist),
-  Paladin (d10  -  holy crusader), Ranger (d10  -  wilderness hunter),
-  Rogue (d8  -  shadow operative), Sorcerer (d6  -  innate mage),
-  Warlock (d8  -  eldritch pact), Wizard (d6  -  scholarly caster)
+  Barbarian (d12 - primal warrior), Bard (d8 - arcane performer),
+  Cleric (d8 - divine champion), Druid (d8 - nature mystic),
+  Fighter (d10 - weapon master), Monk (d8 - martial artist),
+  Paladin (d10 - holy crusader), Ranger (d10 - wilderness hunter),
+  Rogue (d8 - shadow operative), Sorcerer (d6 - innate mage),
+  Warlock (d8 - eldritch pact), Wizard (d6 - scholarly caster)
 Choose 2 class-appropriate starting skill proficiencies and emit inside fences:
 \`\`\`game
 { "type": "set_class", "class": "Wizard", "skills": ["Arcana", "History"] }
@@ -799,7 +805,8 @@ creation_complete MUST be in the array or the game will not start.
 ]
 \`\`\`
 Do NOT start the adventure or describe any scene yet. That happens next turn.
-`.trim();
+`).trim();
+}
 
 function buildOpeningPrompt(state) {
     const w = state.flags.world;
@@ -855,8 +862,11 @@ NARRATIVE
 * Progress time naturally (morning → noon → afternoon → evening → night).
 
 DICE ROLLS
-Always show dice rolls visibly in your narrative like: [d20: 14] or [d20: 14 + 3 STR = 17 vs DC 15].
-The player should always see what was rolled and whether it succeeded.
+All dice rolls are handled by the lore engine and shown as system messages in chat automatically.
+When you describe a roll in your narrative, reference the result like:
+  "You swing your sword [d20: 14 + 3 = 17 vs AC 15] - the blade connects!"
+  "You attempt to pick the lock [d20: 8 + 2 DEX = 10 vs DC 12] - the pick snaps."
+Always state: the formula rolled, the modifiers, the total, and what it was against.
 
 ABILITY CHECKS & SAVES
 * Set a DC (8 easy / 12 moderate / 16 hard / 20 very hard / 25 nearly impossible).
@@ -1034,27 +1044,70 @@ function buildHudHtml(state) {
 }
 
 
-// ── Dice Helper ───────────────────────────────────────────────────────────────
-// Wraps ST's /roll slash command if the Dice extension is installed.
-// Falls back to a pure JS roll if not available.
-// The GM prompt tells the model to include roll results inline so the player
-// always sees what was rolled.
+// ── Dice Integration ─────────────────────────────────────────────────────────
+// Uses SillyTavern.libs.droll (exposed by Extension-Dice) if available.
+// Falls back to Math.random() if the extension is not installed.
+// Rolls are posted as system messages in chat so the player sees the animation.
 
-function rollDie(sides) {
-    // If ST's executeSlashCommands is available, use it so the dice animation shows
-    if (typeof window !== 'undefined' && window.SillyTavern) {
+function roll(formula) {
+    const result = { formula, total: 0, rolls: [], display: '' };
+
+    if (typeof window !== 'undefined' && window.SillyTavern?.libs?.droll) {
         try {
-            const ctx = window.SillyTavern.getContext();
-            if (ctx && typeof ctx.executeSlashCommands === 'function') {
-                ctx.executeSlashCommands(`/roll quiet=true 1d${sides}`);
+            const r = window.SillyTavern.libs.droll.roll(formula);
+            if (r) {
+                result.total = r.total;
+                result.rolls = r.rolls;
+                result.display = `[${formula}: ${r.rolls.join('+')} = ${r.total}]`;
+                // Post the visible roll as a system message so it appears in chat
+                try {
+                    const ctx = window.SillyTavern.getContext();
+                    const charName = ctx?.characters?.[ctx?.characterId]?.name || 'GM';
+                    ctx?.sendSystemMessage?.('generic',
+                        `${charName} rolls ${formula} - Result: ${r.total} (${r.rolls.join(', ')})`,
+                        { isSmallSys: true }
+                    );
+                } catch (_) { /* chat message optional */ }
+                return result;
             }
-        } catch (_) { /* not available */ }
+        } catch (_) { /* fall through */ }
     }
-    return Math.floor(Math.random() * sides) + 1;
+
+    // Fallback: pure JS roll
+    const match = formula.match(/^(\d+)d(\d+)([+-]\d+)?$/i);
+    if (match) {
+        const count = parseInt(match[1]) || 1;
+        const sides = parseInt(match[2]) || 6;
+        const bonus = parseInt(match[3]) || 0;
+        const rolls = Array.from({ length: count }, () => Math.floor(Math.random() * sides) + 1);
+        result.rolls = rolls;
+        result.total = rolls.reduce((a, b) => a + b, 0) + bonus;
+        result.display = bonus
+            ? `[${formula}: ${rolls.join('+')}${bonus >= 0 ? '+' : ''}${bonus} = ${result.total}]`
+            : `[${formula}: ${rolls.join('+')} = ${result.total}]`;
+    } else {
+        result.total = Math.floor(Math.random() * 20) + 1;
+        result.display = `[${formula}: ${result.total}]`;
+    }
+    return result;
 }
 
-function rollD20() { return rollDie(20); }
-function rollD6()  { return rollDie(6); }
+// Convenience wrappers used in event processing
+const d20 = () => roll('1d20');
+const d12 = () => roll('1d12');
+const d10 = () => roll('1d10');
+const d8  = () => roll('1d8');
+const d6  = () => roll('1d6');
+const d4  = () => roll('1d4');
+
+// Roll 4d6 drop lowest (ability score generation)
+function roll4d6dropLowest() {
+    const rolls = [d6().total, d6().total, d6().total, d6().total];
+    const min   = Math.min(...rolls);
+    const kept  = [...rolls];
+    kept.splice(kept.indexOf(min), 1);
+    return { total: kept.reduce((a, b) => a + b, 0), rolls, kept };
+}
 
 // ── Module Export ──────────────────────────────────────────────────────────────
 
@@ -1094,7 +1147,7 @@ const SimpleLore = {
         let systemPrompt;
 
         if (state.charCreation) {
-            systemPrompt = CREATION_PROMPT;
+            systemPrompt = buildCreationPrompt();
         } else if (state.flags.freshStart) {
             // First turn after char gen  -  set the opening scene
             state.flags.freshStart = false;
