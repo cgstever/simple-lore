@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.6.2';
+const VERSION = '1.7.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -618,6 +618,25 @@ const LOOT = {
     ],
 };
 
+
+// ── Spell Lists (Open5e SRD, CC-BY 4.0) ──────────────────────────────────────
+// Cantrips + L1 + L2 per caster class. Used for HUD display and GM reference.
+
+const SPELL_LISTS = {
+    bard:      { cantrips: ["Dancing Lights","Light","Mage Hand","Mending","Message","Minor Illusion","Prestidigitation","True Strike"], lvl1: ["Animal Friendship","Bane","Charm Person","Comprehend Languages","Cure Wounds","Detect Magic","Disguise Self","Faerie Fire","Feather Fall","Healing Word"], lvl2: ["Animal Messenger","Blindness/Deafness","Calm Emotions","Detect Thoughts","Enhance Ability","Enthrall","Heat Metal","Hold Person"] },
+    cleric:    { cantrips: ["Guidance","Light","Mending","Resistance","Sacred Flame","Spare the Dying","Thaumaturgy"], lvl1: ["Bane","Bless","Burning Hands","Charm Person","Command","Create or Destroy Water","Cure Wounds","Detect Evil and Good","Detect Magic","Detect Poison and Disease"], lvl2: ["Aid","Augury","Barkskin","Blindness/Deafness","Calm Emotions","Continual Flame","Enhance Ability","Find Traps"] },
+    druid:     { cantrips: ["Druidcraft","Guidance","Mending","Poison Spray","Produce Flame","Resistance","Shillelagh"], lvl1: ["Animal Friendship","Charm Person","Create or Destroy Water","Cure Wounds","Detect Magic","Detect Poison and Disease","Entangle","Faerie Fire","Fog Cloud","Goodberry"], lvl2: ["Acid Arrow","Animal Messenger","Barkskin","Blur","Darkness","Darkvision","Enhance Ability","Find Traps"] },
+    paladin:   { cantrips: [], lvl1: ["Bless","Command","Cure Wounds","Detect Evil and Good","Detect Magic","Detect Poison and Disease","Divine Favor","Heroism","Protection from Evil and Good","Shield of Faith"], lvl2: ["Aid","Branding Smite","Find Steed","Lesser Restoration","Locate Object","Magic Weapon","Protection from Poison","Zone of Truth"] },
+    ranger:    { cantrips: [], lvl1: ["Alarm","Animal Friendship","Cure Wounds","Detect Magic","Detect Poison and Disease","Fog Cloud","Goodberry","Hunter's Mark","Jump","Longstrider"], lvl2: ["Animal Messenger","Barkskin","Darkvision","Find Traps","Lesser Restoration","Locate Animals or Plants","Locate Object","Pass without Trace"] },
+    sorcerer:  { cantrips: ["Acid Splash","Chill Touch","Dancing Lights","Fire Bolt","Light","Mage Hand","Mending","Message"], lvl1: ["Burning Hands","Charm Person","Color Spray","Comprehend Languages","Detect Magic","Disguise Self","Expeditious Retreat","False Life","Feather Fall","Fog Cloud"], lvl2: ["Alter Self","Blindness/Deafness","Blur","Darkness","Darkvision","Detect Thoughts","Enhance Ability","Enlarge/Reduce"] },
+    warlock:   { cantrips: ["Chill Touch","Eldritch Blast","Mage Hand","Minor Illusion","Poison Spray","Prestidigitation","True Strike"], lvl1: ["Burning Hands","Charm Person","Command","Comprehend Languages","Expeditious Retreat","Faerie Fire","Hellish Rebuke","Hideous Laughter","Illusory Script","Protection from Evil and Good"], lvl2: ["Blindness/Deafness","Calm Emotions","Darkness","Detect Thoughts","Enthrall","Hold Person","Invisibility","Mirror Image"] },
+    wizard:    { cantrips: ["Acid Splash","Chill Touch","Dancing Lights","Fire Bolt","Light","Mage Hand","Mending","Message"], lvl1: ["Alarm","Burning Hands","Charm Person","Color Spray","Comprehend Languages","Detect Magic","Disguise Self","Expeditious Retreat","False Life","Feather Fall"], lvl2: ["Acid Arrow","Alter Self","Arcane Lock","Blindness/Deafness","Blur","Continual Flame","Darkness","Darkvision"] },
+    barbarian: { cantrips: [], lvl1: [], lvl2: [] },
+    fighter:   { cantrips: [], lvl1: [], lvl2: [] },
+    monk:      { cantrips: [], lvl1: [], lvl2: [] },
+    rogue:     { cantrips: [], lvl1: [], lvl2: [] },
+};
+
 // Pick a level-appropriate random encounter for the current world
 function pickEncounter(worldId, playerLevel) {
     const table = ENCOUNTERS[worldId];
@@ -929,6 +948,148 @@ EVENT BLOCKS  -  emit AFTER narrative, only include events that occurred:
 \`\`\`
 `.trim();
 
+function buildSpellsHtml(state) {
+    const cls = state.player?.class?.toLowerCase();
+    const spells = SPELL_LISTS[cls];
+    const slots  = state.spellSlots;
+
+    if (!spells || (!spells.cantrips.length && !spells.lvl1.length)) return '';
+
+    const known = state.flags.knownSpells || {};
+
+    const slotBadge = (lvl) => {
+        if (!slots) return '';
+        if (slots.pact) {
+            const pk = slots.pact;
+            return `<span style="background:#4a148c;color:#e1bee7;border-radius:3px;padding:0 4px;font-size:10px;margin-left:4px;">Pact L${pk.level}: ${pk.count - pk.used}/${pk.count}</span>`;
+        }
+        if (slots[lvl]) {
+            const s = slots[lvl];
+            const color = s.used >= s.max ? '#555' : '#4a148c';
+            return `<span style="background:${color};color:#e1bee7;border-radius:3px;padding:0 4px;font-size:10px;margin-left:4px;">${s.max - s.used}/${s.max}</span>`;
+        }
+        return '';
+    };
+
+    const spellRow = (name, lvl) => {
+        const prepared = known[name];
+        const dot = prepared
+            ? `<span style="color:#ce93d8;margin-right:4px;">&#x25CF;</span>`
+            : `<span style="color:#444;margin-right:4px;">&#x25CB;</span>`;
+        return `<div style="font-size:12px;color:#ccc;padding:1px 0;">${dot}${name}</div>`;
+    };
+
+    let html = `<details style="margin-top:6px;">
+    <summary style="cursor:pointer;font-size:12px;color:#888;">Spells</summary>
+    <div style="margin-top:4px;">`;
+
+    if (spells.cantrips.length) {
+        html += `<div style="font-size:11px;color:#7986cb;margin:4px 0 2px;">Cantrips (at will)</div>`;
+        html += spells.cantrips.map(s => spellRow(s, 0)).join('');
+    }
+    if (spells.lvl1.length) {
+        html += `<div style="font-size:11px;color:#7986cb;margin:4px 0 2px;">Level 1 ${slotBadge(1)}</div>`;
+        html += spells.lvl1.map(s => spellRow(s, 1)).join('');
+    }
+    if (spells.lvl2.length && (state.player?.level || 1) >= 3) {
+        html += `<div style="font-size:11px;color:#7986cb;margin:4px 0 2px;">Level 2 ${slotBadge(2)}</div>`;
+        html += spells.lvl2.map(s => spellRow(s, 2)).join('');
+    }
+
+    html += `</div></details>`;
+    return html;
+}
+
+// ── Floating HUD Window ───────────────────────────────────────────────────────
+// Injects a draggable, resizable overlay into the main ST window.
+// Toggled by the Float button in the panel HUD or window._simpleLoreFloatToggle().
+
+function initFloatingHud() {
+    if (typeof document === 'undefined') return;
+    if (document.getElementById('sl-float')) return; // already exists
+
+    const win = document.createElement('div');
+    win.id = 'sl-float';
+    win.style.cssText = `
+        position: fixed;
+        top: 80px;
+        right: 20px;
+        width: 280px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: #0d0d1a;
+        border: 1px solid #333;
+        border-radius: 8px;
+        box-shadow: 0 4px 24px rgba(0,0,0,0.7);
+        z-index: 9999;
+        display: none;
+        font-family: monospace;
+        scrollbar-width: thin;
+        scrollbar-color: #333 #0d0d1a;
+    `;
+
+    // Drag handle
+    const header = document.createElement('div');
+    header.style.cssText = `
+        padding: 6px 10px;
+        background: #1a1a2e;
+        border-bottom: 1px solid #333;
+        border-radius: 8px 8px 0 0;
+        cursor: move;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        user-select: none;
+    `;
+    header.innerHTML = `
+        <span style="font-size:12px;color:#ce93d8;font-weight:bold;">&#x2694; Simple Lore</span>
+        <button id="sl-float-close" style="background:none;border:none;color:#888;cursor:pointer;font-size:14px;padding:0;">&#x2715;</button>
+    `;
+
+    const body = document.createElement('div');
+    body.id   = 'sl-float-body';
+    body.style.padding = '8px 10px';
+
+    win.appendChild(header);
+    win.appendChild(body);
+    document.body.appendChild(win);
+
+    // Close button
+    document.getElementById('sl-float-close').onclick = () => { win.style.display = 'none'; };
+
+    // Drag logic
+    let dragging = false, ox = 0, oy = 0;
+    header.addEventListener('mousedown', e => {
+        dragging = true;
+        ox = e.clientX - win.offsetLeft;
+        oy = e.clientY - win.offsetTop;
+        e.preventDefault();
+    });
+    document.addEventListener('mousemove', e => {
+        if (!dragging) return;
+        win.style.left = (e.clientX - ox) + 'px';
+        win.style.top  = (e.clientY - oy) + 'px';
+        win.style.right = 'auto';
+    });
+    document.addEventListener('mouseup', () => { dragging = false; });
+
+    // Toggle function
+    window._simpleLoreFloatToggle = () => {
+        win.style.display = win.style.display === 'none' ? 'block' : 'none';
+        if (win.style.display === 'block') {
+            const el = document.getElementById('sl-float-body');
+            if (el) el.innerHTML = buildHudHtml(_hudState);
+        }
+    };
+
+    // Keep float window in sync with HUD state
+    window._simpleLoreFloatRefresh = () => {
+        if (win.style.display === 'none') return;
+        const el = document.getElementById('sl-float-body');
+        if (el) el.innerHTML = buildHudHtml(_hudState);
+    };
+}
+
 // ── HUD ───────────────────────────────────────────────────────────────────────
 // Cached state reference so the panel can live-update without waiting for IDB.
 let _hudState = null;
@@ -1042,7 +1203,12 @@ function buildHudHtml(state) {
     <div style="margin-top:4px;">${questHtml}</div>
   </details>
 
-  <div style="margin-top:6px;font-size:10px;color:#444;">Turn ${state.turn || 0} · simple-lore v${VERSION}</div>
+  ${buildSpellsHtml(state)}
+
+  <div style="margin-top:8px;display:flex;gap:6px;align-items:center;">
+    <div style="margin-top:6px;font-size:10px;color:#444;">Turn ${state.turn || 0} · simple-lore v${VERSION}</div>
+    <button onclick="window._simpleLoreFloatToggle?.()" style="font-size:10px;padding:2px 6px;background:#2a2a4a;border:1px solid #444;border-radius:3px;color:#aaa;cursor:pointer;margin-left:auto;">&#x26F6; Float</button>
+  </div>
 </div>`;
 }
 
@@ -1174,6 +1340,7 @@ const SimpleLore = {
         };
 
         tryLoadState();
+        initFloatingHud();
 
         // Keep refreshing so state stays live after each turn
         if (_hudInterval) clearInterval(_hudInterval);
@@ -1214,6 +1381,7 @@ const SimpleLore = {
         }
 
         _hudState = state;
+        window._simpleLoreFloatRefresh?.();
         return { systemPrompt, state };
     },
 
@@ -1233,6 +1401,7 @@ const SimpleLore = {
             .trim();
 
         _hudState = state;
+        window._simpleLoreFloatRefresh?.();
         return { state, cleanedText };
     },
 };
