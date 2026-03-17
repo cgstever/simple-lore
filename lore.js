@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.5.3';
+const VERSION = '1.5.4';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -784,16 +784,20 @@ Ask for the character's name (and optionally a brief backstory hook), then emit 
 { "type": "rename", "name": "Lyra Ashveil" }
 \`\`\`
 
-Then emit, in order:
-1. creation_complete
-2. item_add events for class-appropriate starting gear (weapon, armor if any,
-   adventuring supplies). Use realistic 5e starting equipment for the class.
-   Examples  -  Fighter: longsword, shield, chain mail, 5x javelins, explorer's pack
-              Wizard: quarterstaff, spellbook, component pouch, scholar's pack, 10gp
-              Rogue: shortsword, shortbow + 20 arrows, leather armor, thieves' tools, burglar's pack
-3. gold_change for starting gold appropriate to the class (PHB starting wealth)
-4. A quest_add for the first hook  -  keep it vague, just enough to motivate leaving the tavern
-
+Then emit ALL of the following in a SINGLE fenced block. Replace items/gold with class-appropriate gear.
+creation_complete MUST be in the array or the game will not start.
+\`\`\`game
+[
+  { "type": "rename", "name": "Cody" },
+  { "type": "creation_complete" },
+  { "type": "gold_change", "amount": 15 },
+  { "type": "item_add", "item": "Quarterstaff" },
+  { "type": "item_add", "item": "Spellbook" },
+  { "type": "item_add", "item": "Component Pouch" },
+  { "type": "item_add", "item": "Health Potion" },
+  { "type": "quest_add", "title": "Into the Unknown", "objective": "Find your footing and seek adventure." }
+]
+\`\`\`
 Do NOT start the adventure or describe any scene yet. That happens next turn.
 `.trim();
 
@@ -849,6 +853,10 @@ NARRATIVE
 * Vivid second-person prose, 4-8 sentences per scene.
 * End every turn with 4-6 numbered action choices for the player.
 * Progress time naturally (morning → noon → afternoon → evening → night).
+
+DICE ROLLS
+Always show dice rolls visibly in your narrative like: [d20: 14] or [d20: 14 + 3 STR = 17 vs DC 15].
+The player should always see what was rolled and whether it succeeded.
 
 ABILITY CHECKS & SAVES
 * Set a DC (8 easy / 12 moderate / 16 hard / 20 very hard / 25 nearly impossible).
@@ -1025,6 +1033,29 @@ function buildHudHtml(state) {
 </div>`;
 }
 
+
+// ── Dice Helper ───────────────────────────────────────────────────────────────
+// Wraps ST's /roll slash command if the Dice extension is installed.
+// Falls back to a pure JS roll if not available.
+// The GM prompt tells the model to include roll results inline so the player
+// always sees what was rolled.
+
+function rollDie(sides) {
+    // If ST's executeSlashCommands is available, use it so the dice animation shows
+    if (typeof window !== 'undefined' && window.SillyTavern) {
+        try {
+            const ctx = window.SillyTavern.getContext();
+            if (ctx && typeof ctx.executeSlashCommands === 'function') {
+                ctx.executeSlashCommands(`/roll quiet=true 1d${sides}`);
+            }
+        } catch (_) { /* not available */ }
+    }
+    return Math.floor(Math.random() * sides) + 1;
+}
+
+function rollD20() { return rollDie(20); }
+function rollD6()  { return rollDie(6); }
+
 // ── Module Export ──────────────────────────────────────────────────────────────
 
 const SimpleLore = {
@@ -1047,8 +1078,8 @@ const SimpleLore = {
         if (_hudInterval) clearInterval(_hudInterval);
         _hudInterval = setInterval(() => {
             const el = document.getElementById('simple-lore-hud');
-            if (el) el.innerHTML = buildHudHtml(_hudState);
-        }, 2000);
+            if (el && document.contains(el)) el.innerHTML = buildHudHtml(_hudState);
+        }, 5000);
     },
 
     processTurn({ state, systemText, messages, charNameHint, personaName } = {}) {
