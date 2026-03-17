@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -643,36 +643,45 @@ const SimpleLore = {
         return {};
     },
 
-    processTurn(state, context) {
+    processTurn({ state, systemText, messages, charNameHint, personaName } = {}) {
+        if (!state) state = {};
         if (!state.player) Object.assign(state, defaultState());
 
-        state.turn        = (state.turn || 0) + 1;
-        state.player.ac   = calcAC(state);
+        state.turn      = (state.turn || 0) + 1;
+        state.player.ac = calcAC(state);
 
         const levelUp = checkLevelUp(state);
 
-        let injection;
+        let systemPrompt;
 
         if (state.charCreation) {
-            injection = CREATION_PROMPT;
+            systemPrompt = CREATION_PROMPT;
         } else {
-            injection = buildStatBlock(state) + '\n\n' + GM_RULES;
+            systemPrompt = buildStatBlock(state) + '\n\n' + GM_RULES;
             if (levelUp) {
-                injection +=
+                systemPrompt +=
                     `\n\n[LEVEL UP! ${state.player.name} reached level ${levelUp.to} ` +
                     `(was ${levelUp.from}). Max HP increased by ${levelUp.hpGain}. ` +
                     `Announce this dramatically before the scene.]`;
             }
         }
 
-        return { injection, state };
+        return { systemPrompt, state };
     },
 
-    handleResponse(response, state) {
-        const events = parseGameEvents(response);
+    handleResponse({ assistantText, state } = {}) {
+        if (!state) return {};
+        const events = parseGameEvents(assistantText || '');
         for (const ev of events) applyEvent(state, ev);
         state.player.ac = calcAC(state);
-        return { state };
+
+        // Strip ```game ... ``` blocks from the visible chat message
+        const cleanedText = (assistantText || '')
+            .replace(/```game[\s\S]*?```/gi, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+
+        return { state, cleanedText };
     },
 };
 
