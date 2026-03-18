@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.7.1';
+const VERSION = '1.8.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -1443,12 +1443,162 @@ const SimpleLore = {
     },
 
     getSettingsHtml() {
-        return `<div id="simple-lore-hud">${buildHudHtml(_hudState)}</div>`;
+        return `
+<div id="simple-lore-hud">${buildHudHtml(_hudState)}</div>
+
+<div id="sl-char-manager" style="margin-top:10px;border-top:1px solid #2a2a4a;padding-top:8px;">
+  <div style="font-size:12px;color:#888;margin-bottom:6px;cursor:pointer;user-select:none;"
+       onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+    &#x1F4BE; Characters &#x25BE;
+  </div>
+  <div id="sl-char-panel" style="display:none;">
+    <div style="display:flex;gap:4px;margin-bottom:6px;">
+      <input id="sl-char-name" type="text" placeholder="Save name..." maxlength="32"
+        style="flex:1;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e0e0ff;padding:4px 6px;font-size:12px;"/>
+      <button id="sl-char-save" style="background:#2a2a4a;border:1px solid #444;border-radius:4px;color:#ce93d8;padding:4px 8px;font-size:11px;cursor:pointer;">Save</button>
+    </div>
+    <select id="sl-char-select" style="width:100%;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#e0e0ff;padding:4px;font-size:12px;margin-bottom:6px;">
+      <option value="">-- saved characters --</option>
+    </select>
+    <div style="display:flex;gap:4px;">
+      <button id="sl-char-load"   style="flex:1;background:#1a3a1a;border:1px solid #2a5a2a;border-radius:4px;color:#a5d6a7;padding:4px 6px;font-size:11px;cursor:pointer;">Load</button>
+      <button id="sl-char-export" style="flex:1;background:#1a2a3a;border:1px solid #2a4a6a;border-radius:4px;color:#90caf9;padding:4px 6px;font-size:11px;cursor:pointer;">Export</button>
+      <button id="sl-char-delete" style="flex:1;background:#3a1a1a;border:1px solid #6a2a2a;border-radius:4px;color:#ef9a9a;padding:4px 6px;font-size:11px;cursor:pointer;">Delete</button>
+    </div>
+    <div id="sl-char-msg" style="font-size:11px;margin-top:4px;min-height:14px;"></div>
+  </div>
+</div>`;
     },
 
     onSettingsRendered() {
-        // Seed _hudState from IndexedDB immediately so the panel
-        // never flashes "Waiting for game to start" between turns.
+        // ── Character Manager ─────────────────────────────────────────────────
+        const CHAR_DB_KEY = 'simple-lore::chars';
+
+        const openCharDB = () => new Promise((res, rej) => {
+            const req = indexedDB.open('overwrite', 2);
+            req.onsuccess = () => res(req.result);
+            req.onerror  = () => rej(req.error);
+        });
+
+        const loadCharList = async () => {
+            try {
+                const db  = await openCharDB();
+                const tx  = db.transaction('session_state', 'readonly');
+                const req = tx.objectStore('session_state').get(CHAR_DB_KEY);
+                return await new Promise((res, rej) => {
+                    req.onsuccess = () => res(req.result?.data || {});
+                    req.onerror   = () => rej(req.error);
+                });
+            } catch (_) { return {}; }
+        };
+
+        const saveCharList = async (list) => {
+            const db  = await openCharDB();
+            const tx  = db.transaction('session_state', 'readwrite');
+            const req = tx.objectStore('session_state').put({ id: CHAR_DB_KEY, data: list });
+            return new Promise((res, rej) => {
+                req.onsuccess = () => res();
+                req.onerror   = () => rej(req.error);
+            });
+        };
+
+        const refreshSelect = async () => {
+            const sel  = document.getElementById('sl-char-select');
+            if (!sel) return;
+            const list = await loadCharList();
+            const keys = Object.keys(list).sort();
+            sel.innerHTML = '<option value="">-- saved characters --</option>' +
+                keys.map(k => {
+                    const c = list[k];
+                    const label = `${k}  (${c.player?.race || '?'} ${c.player?.class || '?'} Lv${c.player?.level || 1})`;
+                    return `<option value="${k}">${label}</option>`;
+                }).join('');
+        };
+
+        const msg = (text, color = '#aaa') => {
+            const el = document.getElementById('sl-char-msg');
+            if (el) { el.textContent = text; el.style.color = color; }
+        };
+
+        // Wire up buttons once panel is visible
+        const wireButtons = async () => {
+            await refreshSelect();
+
+            document.getElementById('sl-char-save')?.addEventListener('click', async () => {
+                const nameEl = document.getElementById('sl-char-name');
+                const name   = nameEl?.value?.trim();
+                if (!name) { msg('Enter a save name.', '#ef9a9a'); return; }
+                if (!_hudState?.player) { msg('No character to save yet.', '#ef9a9a'); return; }
+                const list = await loadCharList();
+                list[name] = JSON.parse(JSON.stringify(_hudState)); // deep copy
+                list[name]._savedAt = Date.now();
+                await saveCharList(list);
+                if (nameEl) nameEl.value = '';
+                await refreshSelect();
+                msg(`Saved "${name}".`, '#a5d6a7');
+            });
+
+            document.getElementById('sl-char-load')?.addEventListener('click', async () => {
+                const sel  = document.getElementById('sl-char-select');
+                const name = sel?.value;
+                if (!name) { msg('Select a character first.', '#ef9a9a'); return; }
+                const list = await loadCharList();
+                const saved = list[name];
+                if (!saved) { msg('Character not found.', '#ef9a9a'); return; }
+
+                // Write into current session's IDB slot
+                try {
+                    const ctx    = window.SillyTavern?.getContext();
+                    const chatId = ctx?.getCurrentChatId?.() || 'unknown';
+                    let charName = ctx?.characters?.[ctx?.characterId]?.name || 'unknown';
+                    const key    = `${charName}::${chatId}`;
+                    const db     = await openCharDB();
+                    const tx     = db.transaction('session_state', 'readwrite');
+                    const req    = tx.objectStore('session_state').put({ id: key, data: saved });
+                    await new Promise((res, rej) => { req.onsuccess = res; req.onerror = rej; });
+                    _hudState = saved;
+                    const hudEl = document.getElementById('simple-lore-hud');
+                    if (hudEl) hudEl.innerHTML = buildHudHtml(_hudState);
+                    window._simpleLoreFloatRefresh?.();
+                    msg(`Loaded "${name}". Start a new message to begin.`, '#a5d6a7');
+                } catch (e) { msg('Load failed: ' + e.message, '#ef9a9a'); }
+            });
+
+            document.getElementById('sl-char-export')?.addEventListener('click', async () => {
+                const sel  = document.getElementById('sl-char-select');
+                const name = sel?.value;
+                if (!name) { msg('Select a character first.', '#ef9a9a'); return; }
+                const list = await loadCharList();
+                const saved = list[name];
+                if (!saved) return;
+                const blob = new Blob([JSON.stringify(saved, null, 2)], { type: 'application/json' });
+                const a    = document.createElement('a');
+                a.href     = URL.createObjectURL(blob);
+                a.download = `${name.replace(/\s+/g,'-')}-simplelore.json`;
+                a.click();
+                msg(`Exported "${name}".`, '#90caf9');
+            });
+
+            document.getElementById('sl-char-delete')?.addEventListener('click', async () => {
+                const sel  = document.getElementById('sl-char-select');
+                const name = sel?.value;
+                if (!name) { msg('Select a character first.', '#ef9a9a'); return; }
+                if (!confirm(`Delete "${name}"?`)) return;
+                const list = await loadCharList();
+                delete list[name];
+                await saveCharList(list);
+                await refreshSelect();
+                msg(`Deleted "${name}".`, '#ef9a9a');
+            });
+        };
+
+        // Wire on first render; re-wire if panel is toggled open
+        wireButtons();
+        document.getElementById('sl-char-panel')?.parentElement
+            ?.querySelector('[onclick]')
+            ?.addEventListener('click', () => setTimeout(refreshSelect, 50));
+
+        // ── HUD refresh ───────────────────────────────────────────────────────
         const tryLoadState = async () => {
             try {
                 if (typeof window === 'undefined' || !window.SillyTavern) return;
@@ -1464,13 +1614,7 @@ const SimpleLore = {
                 }
                 charName = charName || 'unknown';
                 const key = `${charName}::${chatId}`;
-
-                // Access IDB directly — same DB/store the extension uses
-                const db = await new Promise((res, rej) => {
-                    const req = indexedDB.open('overwrite', 2);
-                    req.onsuccess = () => res(req.result);
-                    req.onerror  = () => rej(req.error);
-                });
+                const db  = await openCharDB();
                 const stored = await new Promise((res, rej) => {
                     const tx  = db.transaction('session_state', 'readonly');
                     const req = tx.objectStore('session_state').get(key);
@@ -1488,12 +1632,12 @@ const SimpleLore = {
         tryLoadState();
         initFloatingHud();
 
-        // Keep refreshing so state stays live after each turn
         if (_hudInterval) clearInterval(_hudInterval);
         _hudInterval = setInterval(async () => {
             await tryLoadState();
             const el = document.getElementById('simple-lore-hud');
             if (el && document.contains(el)) el.innerHTML = buildHudHtml(_hudState);
+            window._simpleLoreFloatRefresh?.();
         }, 5000);
     },
 
