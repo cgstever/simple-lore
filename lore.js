@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.9.0';
+const VERSION = '1.9.1';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -1483,17 +1483,25 @@ const SimpleLore = {
         // ---- Server helpers ----
 
         const uploadToServer = async (filename, jsonObj) => {
-            const blob = new Blob([JSON.stringify(jsonObj, null, 2)], { type: 'application/json' });
-            const form = new FormData();
-            form.append('file', blob, filename);
-            const resp = await fetch('/api/files/upload', { method: 'POST', body: form });
-            if (!resp.ok) throw new Error(`Upload failed ${resp.status}`);
+            // ST /api/files/upload expects { name, data } with base64-encoded data
+            const raw    = JSON.stringify(jsonObj, null, 2);
+            const b64    = btoa(unescape(encodeURIComponent(raw))); // UTF-8 safe base64
+            const resp   = await fetch('/api/files/upload', {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ name: filename, data: b64 }),
+            });
+            if (!resp.ok) {
+                const text = await resp.text();
+                throw new Error(`Upload failed ${resp.status}: ${text.slice(0,100)}`);
+            }
             const result = await resp.json();
             return result.path || result.url;
         };
 
-        const fetchFromServer = async (path) => {
-            const resp = await fetch(path + '?t=' + Date.now());
+        const fetchFromServer = async (serverPath) => {
+            // serverPath is a relative URL like /user/files/...
+            const resp = await fetch(serverPath + '?t=' + Date.now());
             if (!resp.ok) throw new Error(`Fetch failed ${resp.status}`);
             return resp.json();
         };
