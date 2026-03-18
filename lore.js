@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.8.0';
+const VERSION = '1.9.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -1472,15 +1472,82 @@ const SimpleLore = {
 
     onSettingsRendered() {
         // ── Character Manager ─────────────────────────────────────────────────
-        const CHAR_DB_KEY = 'simple-lore::chars';
+        // ── Character Manager ─────────────────────────────────────────────────
+        // Characters are stored on the ST server so any device on the same
+        // ST instance can access them. An index file tracks name -> server path.
+        // Falls back to local IndexedDB if the server upload fails.
 
+        const CHAR_DB_KEY   = 'simple-lore::chars';
+        const CHAR_INDEX_FILE = 'sl-chars-index.json';
+
+        // ---- Server helpers ----
+
+        const uploadToServer = async (filename, jsonObj) => {
+            const blob = new Blob([JSON.stringify(jsonObj, null, 2)], { type: 'application/json' });
+            const form = new FormData();
+            form.append('file', blob, filename);
+            const resp = await fetch('/api/files/upload', { method: 'POST', body: form });
+            if (!resp.ok) throw new Error(`Upload failed ${resp.status}`);
+            const result = await resp.json();
+            return result.path || result.url;
+        };
+
+        const fetchFromServer = async (path) => {
+            const resp = await fetch(path + '?t=' + Date.now());
+            if (!resp.ok) throw new Error(`Fetch failed ${resp.status}`);
+            return resp.json();
+        };
+
+        // ---- Index management ----
+        // Index shape: { charName: { path: '/api/files/...', savedAt: timestamp, preview: 'Race Class Lv1' } }
+
+        let _charIndexPath = null; // server path to the index file itself
+
+        const loadIndex = async () => {
+            try {
+                // Try server first
+                if (_charIndexPath) {
+                    return await fetchFromServer(_charIndexPath);
+                }
+                // Try to find index path in local IDB
+                const db  = await openCharDB();
+                const row = await new Promise((res, rej) => {
+                    const tx  = db.transaction('session_state', 'readonly');
+                    const req = tx.objectStore('session_state').get('simple-lore::index-path');
+                    req.onsuccess = () => res(req.result?.data ?? null);
+                    req.onerror   = () => rej(req.error);
+                });
+                if (row) {
+                    _charIndexPath = row;
+                    return await fetchFromServer(_charIndexPath);
+                }
+            } catch (_) { /* no server index yet */ }
+            // Fall back to local IDB char list
+            return await loadLocalCharList();
+        };
+
+        const saveIndex = async (index) => {
+            try {
+                const path = await uploadToServer(CHAR_INDEX_FILE, index);
+                _charIndexPath = path;
+                // Persist index path locally so other devices using the same ST also find it
+                const db = await openCharDB();
+                const tx = db.transaction('session_state', 'readwrite');
+                tx.objectStore('session_state').put({ id: 'simple-lore::index-path', data: path });
+            } catch (e) {
+                console.warn('[SimpleLore] Server index save failed, falling back to local:', e.message);
+                await saveLocalCharList(index);
+            }
+        };
+
+        // ---- Local IDB fallback ----
         const openCharDB = () => new Promise((res, rej) => {
             const req = indexedDB.open('overwrite', 2);
             req.onsuccess = () => res(req.result);
-            req.onerror  = () => rej(req.error);
+            req.onerror   = () => rej(req.error);
         });
 
-        const loadCharList = async () => {
+        const loadLocalCharList = async () => {
             try {
                 const db  = await openCharDB();
                 const tx  = db.transaction('session_state', 'readonly');
@@ -1492,26 +1559,26 @@ const SimpleLore = {
             } catch (_) { return {}; }
         };
 
-        const saveCharList = async (list) => {
+        const saveLocalCharList = async (list) => {
             const db  = await openCharDB();
             const tx  = db.transaction('session_state', 'readwrite');
             const req = tx.objectStore('session_state').put({ id: CHAR_DB_KEY, data: list });
-            return new Promise((res, rej) => {
-                req.onsuccess = () => res();
-                req.onerror   = () => rej(req.error);
-            });
+            return new Promise((res, rej) => { req.onsuccess = res; req.onerror = rej; });
         };
 
+        // ---- UI helpers ----
         const refreshSelect = async () => {
-            const sel  = document.getElementById('sl-char-select');
+            const sel = document.getElementById('sl-char-select');
             if (!sel) return;
-            const list = await loadCharList();
-            const keys = Object.keys(list).sort();
+            const index = await loadIndex();
+            const keys  = Object.keys(index).sort();
             sel.innerHTML = '<option value="">-- saved characters --</option>' +
                 keys.map(k => {
-                    const c = list[k];
-                    const label = `${k}  (${c.player?.race || '?'} ${c.player?.class || '?'} Lv${c.player?.level || 1})`;
-                    return `<option value="${k}">${label}</option>`;
+                    const entry   = index[k];
+                    const preview = entry.preview || entry.player
+                        ? (entry.preview || `${entry.player?.race || '?'} ${entry.player?.class || '?'} Lv${entry.player?.level || 1}`)
+                        : '?';
+                    return `<option value="${k}">${k}  (${preview})</option>`;
                 }).join('');
         };
 
@@ -1520,47 +1587,84 @@ const SimpleLore = {
             if (el) { el.textContent = text; el.style.color = color; }
         };
 
-        // Wire up buttons once panel is visible
+        // ---- Button logic ----
         const wireButtons = async () => {
             await refreshSelect();
 
             document.getElementById('sl-char-save')?.addEventListener('click', async () => {
                 const nameEl = document.getElementById('sl-char-name');
                 const name   = nameEl?.value?.trim();
-                if (!name) { msg('Enter a save name.', '#ef9a9a'); return; }
+                if (!name)          { msg('Enter a save name.', '#ef9a9a'); return; }
                 if (!_hudState?.player) { msg('No character to save yet.', '#ef9a9a'); return; }
-                const list = await loadCharList();
-                list[name] = JSON.parse(JSON.stringify(_hudState)); // deep copy
-                list[name]._savedAt = Date.now();
-                await saveCharList(list);
-                if (nameEl) nameEl.value = '';
-                await refreshSelect();
-                msg(`Saved "${name}".`, '#a5d6a7');
+
+                msg('Saving...', '#aaa');
+                try {
+                    const charData = JSON.parse(JSON.stringify(_hudState));
+                    charData._savedAt = Date.now();
+
+                    // Upload the character file to the ST server
+                    const filename  = `sl-char-${name.replace(/[^a-z0-9]/gi, '_')}.json`;
+                    const charPath  = await uploadToServer(filename, charData);
+
+                    // Update and re-upload the index
+                    const index = await loadIndex();
+                    index[name] = {
+                        path:    charPath,
+                        savedAt: charData._savedAt,
+                        preview: `${charData.player?.race || '?'} ${charData.player?.class || '?'} Lv${charData.player?.level || 1}`,
+                    };
+                    await saveIndex(index);
+
+                    if (nameEl) nameEl.value = '';
+                    await refreshSelect();
+                    msg(`Saved "${name}" to server.`, '#a5d6a7');
+                } catch (e) {
+                    // Server failed — fall back to local IDB
+                    console.warn('[SimpleLore] Server save failed, using local:', e.message);
+                    const list = await loadLocalCharList();
+                    list[name] = JSON.parse(JSON.stringify(_hudState));
+                    list[name]._savedAt = Date.now();
+                    await saveLocalCharList(list);
+                    if (nameEl) nameEl.value = '';
+                    await refreshSelect();
+                    msg(`Saved "${name}" locally (server unavailable).`, '#ffe082');
+                }
             });
 
             document.getElementById('sl-char-load')?.addEventListener('click', async () => {
                 const sel  = document.getElementById('sl-char-select');
                 const name = sel?.value;
                 if (!name) { msg('Select a character first.', '#ef9a9a'); return; }
-                const list = await loadCharList();
-                const saved = list[name];
-                if (!saved) { msg('Character not found.', '#ef9a9a'); return; }
 
-                // Write into current session's IDB slot
+                msg('Loading...', '#aaa');
                 try {
+                    const index = await loadIndex();
+                    const entry = index[name];
+                    if (!entry) { msg('Not found in index.', '#ef9a9a'); return; }
+
+                    // Fetch the character from server if we have a path, else use inline data
+                    let charData;
+                    if (entry.path) {
+                        charData = await fetchFromServer(entry.path);
+                    } else {
+                        charData = entry; // legacy local save stored inline
+                    }
+
+                    // Write into current session slot
                     const ctx    = window.SillyTavern?.getContext();
                     const chatId = ctx?.getCurrentChatId?.() || 'unknown';
                     let charName = ctx?.characters?.[ctx?.characterId]?.name || 'unknown';
                     const key    = `${charName}::${chatId}`;
                     const db     = await openCharDB();
                     const tx     = db.transaction('session_state', 'readwrite');
-                    const req    = tx.objectStore('session_state').put({ id: key, data: saved });
+                    const req    = tx.objectStore('session_state').put({ id: key, data: charData });
                     await new Promise((res, rej) => { req.onsuccess = res; req.onerror = rej; });
-                    _hudState = saved;
+
+                    _hudState = charData;
                     const hudEl = document.getElementById('simple-lore-hud');
                     if (hudEl) hudEl.innerHTML = buildHudHtml(_hudState);
                     window._simpleLoreFloatRefresh?.();
-                    msg(`Loaded "${name}". Start a new message to begin.`, '#a5d6a7');
+                    msg(`Loaded "${name}". Send a message to resume.`, '#a5d6a7');
                 } catch (e) { msg('Load failed: ' + e.message, '#ef9a9a'); }
             });
 
@@ -1568,15 +1672,17 @@ const SimpleLore = {
                 const sel  = document.getElementById('sl-char-select');
                 const name = sel?.value;
                 if (!name) { msg('Select a character first.', '#ef9a9a'); return; }
-                const list = await loadCharList();
-                const saved = list[name];
-                if (!saved) return;
-                const blob = new Blob([JSON.stringify(saved, null, 2)], { type: 'application/json' });
-                const a    = document.createElement('a');
-                a.href     = URL.createObjectURL(blob);
-                a.download = `${name.replace(/\s+/g,'-')}-simplelore.json`;
-                a.click();
-                msg(`Exported "${name}".`, '#90caf9');
+                try {
+                    const index = await loadIndex();
+                    const entry = index[name];
+                    let charData = entry?.path ? await fetchFromServer(entry.path) : entry;
+                    const blob = new Blob([JSON.stringify(charData, null, 2)], { type: 'application/json' });
+                    const a    = document.createElement('a');
+                    a.href     = URL.createObjectURL(blob);
+                    a.download = `${name.replace(/\s+/g, '-')}-simplelore.json`;
+                    a.click();
+                    msg(`Exported "${name}".`, '#90caf9');
+                } catch (e) { msg('Export failed: ' + e.message, '#ef9a9a'); }
             });
 
             document.getElementById('sl-char-delete')?.addEventListener('click', async () => {
@@ -1584,20 +1690,22 @@ const SimpleLore = {
                 const name = sel?.value;
                 if (!name) { msg('Select a character first.', '#ef9a9a'); return; }
                 if (!confirm(`Delete "${name}"?`)) return;
-                const list = await loadCharList();
-                delete list[name];
-                await saveCharList(list);
-                await refreshSelect();
-                msg(`Deleted "${name}".`, '#ef9a9a');
+                try {
+                    const index = await loadIndex();
+                    delete index[name];
+                    await saveIndex(index);
+                    await refreshSelect();
+                    msg(`Deleted "${name}".`, '#ef9a9a');
+                } catch (e) { msg('Delete failed: ' + e.message, '#ef9a9a'); }
             });
         };
 
-        // Wire on first render; re-wire if panel is toggled open
         wireButtons();
         document.getElementById('sl-char-panel')?.parentElement
             ?.querySelector('[onclick]')
             ?.addEventListener('click', () => setTimeout(refreshSelect, 50));
 
+        // ── HUD refresh ───────────────────────────────────────────────────────
         // ── HUD refresh ───────────────────────────────────────────────────────
         const tryLoadState = async () => {
             try {
