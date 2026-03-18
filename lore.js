@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '2.1.2';
+const VERSION = '2.2.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -630,6 +630,15 @@ function applyEvent(state, ev) {
             break;
 
         // ── Misc ────────────────────────────────────────────────────────────
+        case 'companion_hp':
+            if (state.companion) {
+                state.companion.hp = Math.min(
+                    state.companion.maxHp,
+                    Math.max(0, state.companion.hp + (Number(ev.amount) || 0))
+                );
+            }
+            break;
+
         case 'flag_set':
             state.flags[ev.key] = ev.value;
             break;
@@ -1201,6 +1210,54 @@ YOUR JOB THIS TURN:
 }
 
 
+
+
+// ── Companion Block ───────────────────────────────────────────────────────────
+// Reads the ST character card (systemText) and injects it as a companion NPC.
+// The companion travels with the player, is roleplayed by the GM, and has their
+// own HP tracked in state.companion.
+
+function buildCompanionBlock(systemText, state) {
+    if (!systemText || !systemText.trim()) return null;
+
+    // Extract name from the card - ST puts "Name: X" or just the name at the top
+    const nameMatch = systemText.match(/^(?:Name:\s*)?([^\r\n]{1,40})/i);
+    const name = nameMatch ? nameMatch[1].replace(/^Name:\s*/i, '').trim() : 'Companion';
+
+    // Don't treat generic/placeholder names as real companions
+    if (!name || name.toLowerCase().includes('assistant') || name.toLowerCase() === 'lore') {
+        return null;
+    }
+
+    // Seed companion HP if not already set
+    if (!state.companion) {
+        state.companion = {
+            name,
+            hp:    20,
+            maxHp: 20,
+        };
+    } else if (state.companion.name !== name) {
+        // Character card changed - new companion
+        state.companion = { name, hp: 20, maxHp: 20 };
+    }
+
+    const c = state.companion;
+    const hpBar = `${c.hp}/${c.maxHp}`;
+
+    // Trim the card to a reasonable length for injection
+    const cardText = systemText.trim().slice(0, 800);
+
+    return [
+        `COMPANION: ${c.name} (HP: ${hpBar})`,
+        `The following character card describes your companion who travels with the player.`,
+        `Roleplay them consistently based on their personality. They act on their own turn in combat.`,
+        `When the companion takes damage emit: { "type": "companion_hp", "amount": -N }`,
+        `When the companion heals emit: { "type": "companion_hp", "amount": +N }`,
+        `---`,
+        cardText,
+        `---`,
+    ].join('\n');
+}
 
 // ── Quest Anchor ──────────────────────────────────────────────────────────────
 // Injected into every system prompt so the model always knows the current
@@ -2081,10 +2138,15 @@ const SimpleLore = {
             // First turn after char gen  -  set the opening scene
             state.flags.freshStart = false;
             const rules1 = GM_RULES.replace('[WORLD]', state.flags.world?.town || 'this region');
-            systemPrompt = buildStatBlock(state) + '\n\n' + buildQuestAnchor(state) + '\n\n' + rules1 + '\n\n' + buildOpeningPrompt(state);
+            const companionBlock1 = buildCompanionBlock(systemText, state);
+            systemPrompt = buildStatBlock(state) + '\n\n' + buildQuestAnchor(state) + '\n\n' + rules1
+                         + (companionBlock1 ? '\n\n' + companionBlock1 : '')
+                         + '\n\n' + buildOpeningPrompt(state);
         } else {
             const rules2 = GM_RULES.replace('[WORLD]', state.flags.world?.town || 'this region');
-            systemPrompt = buildStatBlock(state) + '\n\n' + buildQuestAnchor(state) + '\n\n' + rules2;
+            const companionBlock2 = buildCompanionBlock(systemText, state);
+            systemPrompt = buildStatBlock(state) + '\n\n' + buildQuestAnchor(state) + '\n\n' + rules2
+                         + (companionBlock2 ? '\n\n' + companionBlock2 : '');
             if (levelUp) {
                 systemPrompt +=
                     `\n\n[LEVEL UP! ${state.player.name} reached level ${levelUp.to} ` +
