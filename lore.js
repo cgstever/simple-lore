@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '2.1.1';
+const VERSION = '2.1.2';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -1104,11 +1104,6 @@ function buildCreationPrompt(state) {
     return (`
 You are the Game Master. The player is building their D&D 5e character.
 Complete ALL FOUR STEPS before starting the adventure.
-
--- IMPORTANT --
-If the player provides ALL their choices in a single message (scores, race, class, name),
-process all four steps at once and emit everything in a single fenced block.
-Do NOT ask follow-up questions if all the information is already there.
 
 -- STEP 1  -  ABILITY SCORES --
 The dice have ALREADY been rolled using real 4d6-drop-lowest. Present these EXACT results:
