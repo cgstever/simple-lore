@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '2.2.1';
+const VERSION = '2.3.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -448,14 +448,16 @@ function applyEvent(state, ev) {
                     state.flags.activeQuest.stage = 0;
                     state.flags.activeQuest.done  = false;
                     state.flags.activeQuest.failed = false;
-                    // Add to visible quest list
+                    // Add to visible quest list (only if not already there)
                     state.quests = state.quests || [];
-                    state.quests.push({
-                        title:     qt.title,
-                        objective: qt.stages[0].objective,
-                        done:      false,
-                        failed:    false,
-                    });
+                    if (!state.quests.find(q => q.title === qt.title)) {
+                        state.quests.push({
+                            title:     qt.title,
+                            objective: qt.stages[0].objective,
+                            done:      false,
+                            failed:    false,
+                        });
+                    }
                 }
             }
             state.flags.freshStart = true;
@@ -465,6 +467,13 @@ function applyEvent(state, ev) {
         case 'rename':
             if (ev.name) p.name = ev.name;
             break;
+
+        case 'set_world': {
+            const idx = Number(ev.worldIndex);
+            state.flags.world = WORLDS_BY_ID[idx] || pickWorld();
+            console.log('[SimpleLore] World set to:', state.flags.world?.id);
+            break;
+        }
 
         case 'xp_gain':
             p.xp += Number(ev.amount) || 0;
@@ -1109,6 +1118,16 @@ function pickWorld() {
     return WORLDS[Math.floor(Math.random() * WORLDS.length)];
 }
 
+// Ordered list matching the 1-6 numbering shown in the creation prompt
+const WORLDS_BY_ID = {
+    1: WORLDS.find(w => w.id === 'thornvale'),
+    2: WORLDS.find(w => w.id === 'saltmere'),
+    3: WORLDS.find(w => w.id === 'ashford'),
+    4: WORLDS.find(w => w.id === 'highmark'),
+    5: WORLDS.find(w => w.id === 'dunmere'),
+    6: WORLDS.find(w => w.id === 'ironcross'),
+};
+
 // ── System Prompts ─────────────────────────────────────────────────────────────
 
 function buildCreationPrompt(state) {
@@ -1166,18 +1185,34 @@ Ask for the character's name (and optionally a brief backstory hook), then emit 
 { "type": "rename", "name": "Lyra Ashveil" }
 \`\`\`
 
+-- STEP 5  -  STARTING REGION --
+Present the following six regions and ask the player to choose one:
+
+  1. The Thornwood Marches  - a vast mist-choked forest of black thorns and ancient ruins
+  2. The Salthallow Coast   - a jagged coastline of hidden coves and smuggler country
+  3. The Cinder Plains      - a scorched volcanic expanse with mining boomtowns
+  4. The Greymount Highlands - windswept moorland and glacial valleys with buried kingdoms
+  5. The Dunwater Fens      - shifting wetlands of floating peat and will-o-wisps
+  6. The Iron Steppe        - a vast flat grassland where nomadic clans ride
+
+Once the player chooses, emit set_world then immediately emit the final creation block.
+\`\`\`game
+{ "type": "set_world", "worldIndex": 2 }
+\`\`\`
+
 Then emit ALL of the following in a SINGLE fenced block. Replace items/gold with class-appropriate gear.
 creation_complete MUST be in the array or the game will not start.
+Do NOT emit quest_add - the quest system handles this automatically.
 \`\`\`game
 [
   { "type": "rename", "name": "Cody" },
+  { "type": "set_world", "worldIndex": 2 },
   { "type": "creation_complete" },
   { "type": "gold_change", "amount": 15 },
   { "type": "item_add", "item": "Quarterstaff" },
   { "type": "item_add", "item": "Spellbook" },
   { "type": "item_add", "item": "Component Pouch" },
-  { "type": "item_add", "item": "Health Potion" },
-  { "type": "quest_add", "title": "Into the Unknown", "objective": "Find your footing and seek adventure." }
+  { "type": "item_add", "item": "Health Potion" }
 ]
 \`\`\`
 Do NOT start the adventure or describe any scene yet. That happens next turn.
