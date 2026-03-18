@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -293,16 +293,21 @@ function buildStatBlock(state) {
         lines.push(`  (empty)`);
     }
 
-    const activeQ = state.quests.filter(q => !q.done);
-    const doneQ   = state.quests.filter(q => q.done);
+    const activeQ = (state.quests || []).filter(q => !q.done && !q.failed);
+    const doneQ   = (state.quests || []).filter(q => q.done && !q.failed);
+    const failedQ = (state.quests || []).filter(q => q.failed);
+    const qt      = state.flags?.activeQuest;
     if (activeQ.length) {
         lines.push(`──`);
         lines.push(`QUESTS:`);
-        activeQ.forEach(q => lines.push(`  [!] ${q.title}: ${q.objective}`));
+        activeQ.forEach(q => {
+            const stageNum = qt && qt.title === q.title ? (qt.stage || 0) + 1 : 1;
+            const total    = qt && qt.title === q.title ? qt.stages.length : '?';
+            lines.push(`  [!] ${q.title} (${stageNum}/${total}): ${q.objective}`);
+        });
     }
-    if (doneQ.length) {
-        lines.push(`  Completed: ${doneQ.map(q => q.title).join(', ')}`);
-    }
+    if (doneQ.length)   lines.push(`  Done: ${doneQ.map(q => q.title).join(', ')}`);
+    if (failedQ.length) lines.push(`  Failed: ${failedQ.map(q => q.title).join(', ')}`);
 
     const world = state.flags.world;
     const worldAnchor = world
@@ -380,7 +385,27 @@ function applyEvent(state, ev) {
 
         case 'creation_complete':
             state.charCreation = null;
-            state.flags.world  = pickWorld();
+            if (!state.flags.world) state.flags.world = pickWorld();
+            // Pick a quest matching the world's hook
+            {
+                const hookIdx = state.flags.hookIndex || 0;
+                const qt = pickQuestForHook(state.flags.world.id, hookIdx);
+                if (qt) {
+                    // Deep copy so we can track stage separately
+                    state.flags.activeQuest = JSON.parse(JSON.stringify(qt));
+                    state.flags.activeQuest.stage = 0;
+                    state.flags.activeQuest.done  = false;
+                    state.flags.activeQuest.failed = false;
+                    // Add to visible quest list
+                    state.quests = state.quests || [];
+                    state.quests.push({
+                        title:     qt.title,
+                        objective: qt.stages[0].objective,
+                        done:      false,
+                        failed:    false,
+                    });
+                }
+            }
             state.flags.freshStart = true;
             break;
 
@@ -441,10 +466,46 @@ function applyEvent(state, ev) {
             }
             break;
 
+        case 'quest_stage': {
+            // Advance active quest to next stage (or specific stage index)
+            const qt = state.flags.activeQuest;
+            if (qt) {
+                const nextStage = ev.stage != null ? Number(ev.stage) : (qt.stage || 0) + 1;
+                qt.stage = Math.min(nextStage, qt.stages.length - 1);
+                // Sync the display quest objective
+                const q = state.quests.find(q => q.title === qt.title);
+                if (q && qt.stages[qt.stage]) {
+                    q.objective = qt.stages[qt.stage].objective;
+                }
+            }
+            break;
+        }
+
         case 'quest_complete': {
+            const qt = state.flags.activeQuest;
+            if (qt && qt.title.toLowerCase().includes((ev.title || '').toLowerCase())) {
+                // Auto-apply reward
+                if (qt.reward) {
+                    state.player.xp   = (state.player.xp   || 0) + (qt.reward.xp   || 0);
+                    state.player.gold = (state.player.gold  || 0) + (qt.reward.gold || 0);
+                    if (qt.reward.item) state.inventory.push(qt.reward.item);
+                }
+                qt.done = true;
+                state.flags.activeQuest = null;
+            }
+            // Also mark in quests array
             const q = state.quests.find(q =>
                 q.title.toLowerCase().includes((ev.title || '').toLowerCase()));
             if (q) q.done = true;
+            break;
+        }
+
+        case 'quest_fail': {
+            const qt = state.flags.activeQuest;
+            if (qt) { qt.failed = true; state.flags.activeQuest = null; }
+            const q = state.quests.find(q =>
+                q.title.toLowerCase().includes((ev.title || ev.id || '').toLowerCase()));
+            if (q) { q.failed = true; q.done = true; }
             break;
         }
 
@@ -747,6 +808,145 @@ function pickLoot(rarity, count = 1) {
     return out;
 }
 
+
+// ── Quest Templates (one per world hook) ─────────────────────────────────────
+// Pre-written quests tied to each world's hooks.
+// Rewards applied automatically by the module on quest_complete.
+// The current stage objective is injected into the system prompt every turn.
+
+const QUEST_TEMPLATES = {
+  thornvale: [
+    { id: 'thornvale_loggers', title: 'The Vanishing Loggers', giver: 'Captain Aldric', giverLocation: 'The Split Log tavern',
+      stages: [
+        { objective: 'Speak to the families of the missing loggers and learn where they were last working', hint: 'The families mention Sorrow\'s Edge, the deepest part of the Thornwood' },
+        { objective: 'Investigate Sorrow\'s Edge and find evidence of what took the loggers', hint: 'Drag marks, fey sigils, a single boot' },
+        { objective: 'Follow the trail into the fey crossing and confront whatever is taking people', hint: 'A redcap warren or a hag\'s bargain gone wrong' },
+      ], reward: { xp: 300, gold: 40, item: 'Cloak of Elvenkind' }, failCondition: 'The player retreats from the fey crossing without resolving the threat' },
+    { id: 'thornvale_fey', title: 'The Debt of Petals', giver: 'Maren the Farmer', giverLocation: 'Thornvale market',
+      stages: [
+        { objective: 'Find the fey bargain contract hidden in the old mill at the forest edge', hint: 'The mill is guarded by animated farm tools' },
+        { objective: 'Negotiate with or trick the fey creditor into voiding the debt', hint: 'The fey wants a name, a memory, or a firstborn - find a loophole' },
+        { objective: 'Return the daughter safely to her family before the next new moon', hint: 'Time is a factor - every wasted day costs something' },
+      ], reward: { xp: 250, gold: 30, item: 'Rope of Climbing' }, failCondition: 'The new moon passes before the daughter is returned' },
+    { id: 'thornvale_ruins', title: 'The Unnamed Script', giver: 'Scholar Vorath', giverLocation: 'The Split Log tavern',
+      stages: [
+        { objective: 'Retrieve a rubbing of the ruins inscription from the collapsed tower northeast of town', hint: 'The tower is unstable - DEX checks to navigate safely' },
+        { objective: 'Bring the rubbing to the sage at Thornvale\'s library for translation', hint: 'The sage recognizes it as a ward - and it\'s been broken' },
+        { objective: 'Reseal the ward at the ruins before whatever it was containing fully escapes', hint: 'A shadow creature is already seeping through' },
+      ], reward: { xp: 350, gold: 50, item: 'Pearl of Power' }, failCondition: 'The shadow creature escapes the ruins entirely' },
+  ],
+  saltmere: [
+    { id: 'saltmere_vessel', title: 'The Empty Crossing', giver: 'Harbormistress Duna', giverLocation: 'The Drowned Anchor',
+      stages: [
+        { objective: 'Board the grounded vessel and search for survivors or clues', hint: 'The ship is the Pale Morning - cargo intact, crew gone, tables still set for dinner' },
+        { objective: 'Find the captain\'s log and decode the last entry', hint: 'Written in a shaking hand - mentions lights below the water and voices' },
+        { objective: 'Dive to the tidal cave entrance and confront the source', hint: 'Aboleth thrall or deep sea hag luring ships' },
+      ], reward: { xp: 400, gold: 60, item: 'Cloak of the Manta Ray' }, failCondition: 'The player is charmed and does not break free before leaving the cave' },
+    { id: 'saltmere_caves', title: 'The Calling Dark', giver: 'Fisher Tam', giverLocation: 'The Drowned Anchor docks',
+      stages: [
+        { objective: 'Find the entrance to the tidal caves accessible only at low tide', hint: 'A local fisherman marks the path on a piece of sailcloth for a few coins' },
+        { objective: 'Locate the source of the voice and resist its compulsion (WIS DC 14)', hint: 'Failure means moving toward it involuntarily' },
+        { objective: 'Destroy or seal the calling stone generating the effect', hint: 'Smashing it causes a psychic burst - CON save or 2d6 psychic damage' },
+      ], reward: { xp: 300, gold: 35, item: 'Sending Stones' }, failCondition: 'The player succumbs to the voice and cannot be recovered' },
+    { id: 'saltmere_smugglers', title: 'The Unmarked Cargo', giver: 'Merchant Osric', giverLocation: 'The Drowned Anchor back room',
+      stages: [
+        { objective: 'Infiltrate the docks at night and identify which ship carries the contested cargo', hint: 'STR or DEX check to avoid crew patrols' },
+        { objective: 'Learn what the cargo actually is before either crew discovers you', hint: 'The crate contains a bound imp - both crews think it is something else' },
+        { objective: 'Resolve the standoff before blood is spilled', hint: 'Three possible outcomes each with different rewards' },
+      ], reward: { xp: 250, gold: 55, item: 'Hat of Disguise' }, failCondition: 'Both crews are killed or the imp escapes into town' },
+  ],
+  ashford: [
+    { id: 'ashford_deep_vein', title: 'What Was Sealed', giver: 'Foreman Grak', giverLocation: 'The Ember and Tongs',
+      stages: [
+        { objective: 'Descend to the sealed chamber at vein 7B and determine what is inside', hint: 'The door bears warning glyphs in Dwarvish - something was deliberately imprisoned here' },
+        { objective: 'Find out why it was sealed and who sealed it', hint: 'Old journal pages scattered in the antechamber tell a partial story' },
+        { objective: 'Either re-seal the chamber or permanently destroy what is inside', hint: 'Re-sealing requires a ritual component; destroying it means a fight' },
+      ], reward: { xp: 350, gold: 45, item: 'Obsidian Amulet' }, failCondition: 'The sealed entity escapes the mine entirely' },
+    { id: 'ashford_company', title: 'Blood and Bloodstone', giver: 'Miner Elva', giverLocation: 'The Ember and Tongs',
+      stages: [
+        { objective: 'Gather testimony from three miners willing to speak against the Company', hint: 'Most are afraid - CHA checks to convince them, or find physical evidence' },
+        { objective: 'Steal or copy the Company ledger showing forced labor contracts', hint: 'The ledger is in the Company office - guarded at night' },
+        { objective: 'Deliver the evidence to the regional magistrate\'s courier before the Company suppresses it', hint: 'The Company sends guards to intercept at the town gate' },
+      ], reward: { xp: 300, gold: 40, item: 'Immovable Rod' }, failCondition: 'The evidence is destroyed or the courier is killed' },
+    { id: 'ashford_bones', title: 'The Tooth Market', giver: 'Collector Siris', giverLocation: 'The Ember and Tongs',
+      stages: [
+        { objective: 'Track the collectors into the wastes and find their dig site', hint: 'Follow wagon tracks east into the obsidian fields - 4 hours on foot' },
+        { objective: 'Discover what the collectors actually found - not just teeth', hint: 'A partially intact dragon skull with a spirit still bound inside' },
+        { objective: 'Free or re-bind the spirit and deal with the collectors', hint: 'The dragon spirit offers a boon if freed; the collectors will fight to keep their prize' },
+      ], reward: { xp: 400, gold: 70, item: 'Dragon Scale Mail' }, failCondition: 'The dragon skull is sold and leaves the region' },
+  ],
+  highmark: [
+    { id: 'highmark_blizzard', title: 'The Lost Caravan', giver: 'Innkeeper Brede', giverLocation: 'The Wayward Ram',
+      stages: [
+        { objective: 'Head into the pass and find where the caravan was stopped', hint: 'Signs of avalanche - the snow is disturbed in a pattern that looks deliberate' },
+        { objective: 'Rescue any survivors before the next storm hits (6 turns)', hint: 'Race against time - the blizzard is coming' },
+        { objective: 'Deal with whoever triggered the avalanche', hint: 'Bandits with a camp hidden in a switchback above the road' },
+      ], reward: { xp: 300, gold: 50, item: 'Boots of Speed' }, failCondition: 'The blizzard arrives before the survivors are found' },
+    { id: 'highmark_cairns', title: 'The Restless Dead', giver: 'Elder Maren', giverLocation: 'The Wayward Ram',
+      stages: [
+        { objective: 'Visit three cairn sites and determine which one was disturbed', hint: 'The third cairn on the north ridge has been excavated from below' },
+        { objective: 'Descend into the cairn and find what was taken from inside', hint: 'A burial crown - whoever took it left tracks heading south' },
+        { objective: 'Recover the crown and return it to the cairn before the wight fully manifests', hint: 'The wight is already forming - they have until dawn' },
+      ], reward: { xp: 350, gold: 30, item: 'Ring of Protection' }, failCondition: 'The wight fully manifests and escapes the cairn' },
+    { id: 'highmark_ransom', title: 'The Quiet Lord', giver: 'Lady Voss', giverLocation: 'The Wayward Ram private room',
+      stages: [
+        { objective: 'Find where the kidnappers are holding Lord Aldren without alerting them', hint: 'A shepherd saw riders heading toward the old mine headworks two days ago' },
+        { objective: 'Infiltrate the hideout and assess the situation', hint: 'Four kidnappers, one lord, one locked cellar - stealth or deception first' },
+        { objective: 'Extract Lord Aldren alive', hint: 'The kidnappers have a signal arrow - if fired, reinforcements arrive in 3 turns' },
+      ], reward: { xp: 400, gold: 100, item: 'Glamoured Studded Leather' }, failCondition: 'Lord Aldren is killed or reinforcements overwhelm the party' },
+  ],
+  dunmere: [
+    { id: 'dunmere_paths', title: 'The Shifting Ways', giver: 'Guide Corra', giverLocation: 'The Bogwitch',
+      stages: [
+        { objective: 'Follow the old fen path markers and document where they now lead incorrectly', hint: 'The markers have been moved deliberately to lead travelers into the deep fens' },
+        { objective: 'Find whoever is moving the markers and why', hint: 'A feral druid is keeping people out of a nesting area for something large' },
+        { objective: 'Resolve the druid\'s concern without the nesting creature being killed', hint: 'Diplomacy, a detour route, or confronting the threat to the nest directly' },
+      ], reward: { xp: 250, gold: 30, item: 'Boots of Elvenkind' }, failCondition: 'The nesting creature is killed or the druid is driven off without resolution' },
+    { id: 'dunmere_wisps', title: 'The Light Shepherd', giver: 'Widow Hessa', giverLocation: 'The Bogwitch',
+      stages: [
+        { objective: 'Follow a will-o-wisp at a safe distance to find where they lead travelers (WIS DC 13 each turn or follow involuntarily)', hint: 'The destination is a sunken ruin' },
+        { objective: 'Explore the ruin and find what feeds the wisps', hint: 'A drowned necromancer\'s phylactery animating the fen dead' },
+        { objective: 'Destroy the phylactery and disperse the wisp cluster', hint: 'The phylactery is underwater - the necromancer fights through the drowned dead' },
+      ], reward: { xp: 400, gold: 40, item: 'Necklace of Adaptation' }, failCondition: 'Three or more travelers are lost to the wisps before the phylactery is destroyed' },
+    { id: 'dunmere_shrine', title: 'The Surfaced Temple', giver: 'Priest Aldour', giverLocation: 'The Bogwitch',
+      stages: [
+        { objective: 'Reach the surfaced temple before the rival faction and enter safely', hint: 'The entrance is still partially flooded - Athletics check to force the door' },
+        { objective: 'Recover the central relic before the rival faction does', hint: 'They arrive midway through exploration - now it is a race' },
+        { objective: 'Escape the temple with the relic before it re-submerges at high tide (8 turns)', hint: 'The tide timer is real' },
+      ], reward: { xp: 350, gold: 55, item: 'Trident of Fish Command' }, failCondition: 'The temple re-submerges with the player inside or the rival faction takes the relic' },
+  ],
+  ironcross: [
+    { id: 'ironcross_clans', title: 'The Grazing Rights', giver: 'Garrison Commander Veth', giverLocation: 'The Red Stirrup',
+      stages: [
+        { objective: 'Meet with both clan leaders separately and understand each side\'s actual grievance', hint: 'The land dispute is a cover - one clan\'s horses are sick and they need the other\'s water source' },
+        { objective: 'Find a compromise before the next moon muster', hint: 'Someone is deliberately poisoning the horses to spark the war' },
+        { objective: 'Expose who is poisoning the horses and why', hint: 'A merchant who profits from clan conflict has a warehouse of weapons ready to sell to the winner' },
+      ], reward: { xp: 300, gold: 45, item: 'Wand of Secrets' }, failCondition: 'The clans go to war before the poisoner is exposed' },
+    { id: 'ironcross_sickness', title: 'The Red Cough', giver: 'Clan Rider Asha', giverLocation: 'The Red Stirrup',
+      stages: [
+        { objective: 'Travel to affected clan camps and find a common cause for the sick horses', hint: 'All sick horses drank from streams flowing past a specific steppe section' },
+        { objective: 'Follow the streams to their source and find what contaminates them', hint: 'A collapsed iron mine is leaching - but something is living in it now' },
+        { objective: 'Clear the mine and seal the contamination source', hint: 'The creature living there is hostile but also sick - it can be driven out rather than killed' },
+      ], reward: { xp: 350, gold: 40, item: 'Periapt of Proof against Poison' }, failCondition: 'The contamination spreads to the main Ironcross water supply' },
+    { id: 'ironcross_vault', title: 'The Buried Survey', giver: 'Scholar Petrin', giverLocation: 'The Red Stirrup',
+      stages: [
+        { objective: 'Locate the pre-empire structure using the partial survey notes', hint: 'The notes reference a stone marker shaped like a seated figure - still there, half-buried' },
+        { objective: 'Enter the structure and find out what happened to the survey team', hint: 'They are inside alive but time-locked - the structure slows time within its walls' },
+        { objective: 'Solve the mechanism holding the time field and collapse it safely', hint: 'INT check to understand it, then a sequence puzzle using the room\'s symbols' },
+      ], reward: { xp: 400, gold: 60, item: 'Gem of Seeing' }, failCondition: 'The player becomes time-locked inside the structure' },
+  ],
+};
+
+function getQuestsForWorld(worldId) {
+    return QUEST_TEMPLATES[worldId] || [];
+}
+
+// Pick the quest that matches the opening hook index
+function pickQuestForHook(worldId, hookIndex) {
+    const quests = getQuestsForWorld(worldId);
+    return quests[hookIndex % quests.length] || quests[0];
+}
+
 // ── World Table ───────────────────────────────────────────────────────────────
 //
 // Each entry defines a region with a named starting town and its tavern.
@@ -955,6 +1155,47 @@ YOUR JOB THIS TURN:
 `.trim();
 }
 
+
+
+// ── Quest Anchor ──────────────────────────────────────────────────────────────
+// Injected into every system prompt so the model always knows the current
+// quest stage, what triggers advancement, and what the reward is.
+
+function buildQuestAnchor(state) {
+    const qt = state.flags?.activeQuest;
+    if (!qt || qt.done || qt.failed) {
+        return 'ACTIVE QUEST: None. Watch for new quest opportunities in the scene.';
+    }
+
+    const stage   = qt.stage || 0;
+    const current = qt.stages[stage];
+    const isLast  = stage === qt.stages.length - 1;
+    const reward  = qt.reward;
+
+    const stageLines = qt.stages.map((s, i) => {
+        const marker = i < stage ? '[DONE]' : i === stage ? '[CURRENT]' : '[LOCKED]';
+        return `  ${marker} Stage ${i + 1}: ${s.objective}`;
+    }).join('\n');
+
+    return [
+        `ACTIVE QUEST: ${qt.title}`,
+        `  Given by: ${qt.giver} at ${qt.giverLocation}`,
+        `  Reward on completion: ${reward.xp}xp  ${reward.gold}gp  ${reward.item ? '+ ' + reward.item : ''}`,
+        `  Fail condition: ${qt.failCondition}`,
+        ``,
+        stageLines,
+        ``,
+        `CURRENT OBJECTIVE (Stage ${stage + 1}): ${current?.objective}`,
+        `  GM HINT: ${current?.hint}`,
+        ``,
+        isLast
+            ? `This is the FINAL stage. When resolved, emit quest_complete.`
+            : `When this stage resolves, emit quest_stage to advance. Do NOT skip stages.`,
+        `quest_stage format: { "type": "quest_stage" }`,
+        `quest_complete format: { "type": "quest_complete", "title": "${qt.title}" }`,
+        `quest_fail format: { "type": "quest_fail", "title": "${qt.title}" }`,
+    ].join('\n');
+}
 
 const GM_RULES = `
 You are the Game Master for a D&D 5e text-based RPG.
@@ -1272,11 +1513,24 @@ function buildHudHtml(state) {
         </div>`).join('');
 
     const activeQ  = (state.quests || []).filter(q => !q.done);
+    const qtActive = state.flags?.activeQuest;
     const questHtml = activeQ.length
-        ? activeQ.map(q => `<div style="margin:3px 0;padding:4px 6px;background:#1a1a2e;border-left:3px solid #7c4dff;border-radius:2px;font-size:12px;">
-            <b style="color:#ce93d8;">${q.title}</b><br>
-            <span style="color:#aaa;">${q.objective}</span>
-          </div>`).join('')
+        ? activeQ.map(q => {
+            const isActive = qtActive && qtActive.title === q.title;
+            const stageNum = isActive ? (qtActive.stage || 0) + 1 : 1;
+            const total    = isActive ? qtActive.stages.length : '?';
+            const hint     = isActive && qtActive.stages[qtActive.stage] ? qtActive.stages[qtActive.stage].hint : '';
+            const reward   = isActive && qtActive.reward
+                ? `${qtActive.reward.xp}xp  ${qtActive.reward.gold}gp${qtActive.reward.item ? '  +' + qtActive.reward.item : ''}`
+                : '';
+            return `<div style="margin:3px 0;padding:4px 6px;background:#1a1a2e;border-left:3px solid #7c4dff;border-radius:2px;font-size:12px;">
+              <b style="color:#ce93d8;">${q.title}</b>
+              <span style="color:#555;font-size:10px;margin-left:6px;">Stage ${stageNum}/${total}</span><br>
+              <span style="color:#aaa;">${q.objective}</span><br>
+              ${hint ? `<span style="color:#555;font-size:10px;">Hint: ${hint}</span><br>` : ''}
+              ${reward ? `<span style="color:#7c4dff;font-size:10px;">Reward: ${reward}</span>` : ''}
+            </div>`;
+          }).join('')
         : `<div style="color:#555;font-style:italic;font-size:12px;">No active quests</div>`;
 
     const invHtml = (state.inventory || []).length
@@ -1782,10 +2036,10 @@ const SimpleLore = {
             // First turn after char gen  -  set the opening scene
             state.flags.freshStart = false;
             const rules1 = GM_RULES.replace('[WORLD]', state.flags.world?.town || 'this region');
-            systemPrompt = buildStatBlock(state) + '\n\n' + rules1 + '\n\n' + buildOpeningPrompt(state);
+            systemPrompt = buildStatBlock(state) + '\n\n' + buildQuestAnchor(state) + '\n\n' + rules1 + '\n\n' + buildOpeningPrompt(state);
         } else {
             const rules2 = GM_RULES.replace('[WORLD]', state.flags.world?.town || 'this region');
-            systemPrompt = buildStatBlock(state) + '\n\n' + rules2;
+            systemPrompt = buildStatBlock(state) + '\n\n' + buildQuestAnchor(state) + '\n\n' + rules2;
             if (levelUp) {
                 systemPrompt +=
                     `\n\n[LEVEL UP! ${state.player.name} reached level ${levelUp.to} ` +
