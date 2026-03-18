@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '2.2.0';
+const VERSION = '2.2.1';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -430,6 +430,13 @@ function applyEvent(state, ev) {
 
         case 'creation_complete':
             state.charCreation = null;
+            // Recalculate HP now that race + class are both set
+            if (state.player.class) {
+                state.player.maxHp = calcMaxHP(state);
+                if (!state.player.hp || state.player.hp === null) {
+                    state.player.hp = state.player.maxHp;
+                }
+            }
             if (!state.flags.world) state.flags.world = pickWorld();
             // Pick a quest matching the world's hook
             {
@@ -506,7 +513,11 @@ function applyEvent(state, ev) {
 
         // ── Quests ──────────────────────────────────────────────────────────
         case 'quest_add':
-            if (ev.title && !state.quests.find(q => q.title === ev.title)) {
+            // Skip if title already exists or matches our active template quest
+            if (ev.title && !state.quests.find(q =>
+                q.title === ev.title ||
+                (state.flags.activeQuest && state.flags.activeQuest.title === ev.title)
+            )) {
                 state.quests.push({ title: ev.title, objective: ev.objective || '', done: false });
             }
             break;
