@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '1.9.1';
+const VERSION = '2.0.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -304,7 +304,13 @@ function buildStatBlock(state) {
         lines.push(`  Completed: ${doneQ.map(q => q.title).join(', ')}`);
     }
 
+    const world = state.flags.world;
+    const worldAnchor = world
+        ? `WORLD: ${world.id} | ${world.town}, ${world.region}\n${world.regionDesc}.`
+        : 'WORLD: unknown';
+
     lines.push(`══ Turn ${state.turn}  |  World: ${state.flags.world?.id || 'unknown'} ══`);
+    lines.push(worldAnchor);
     return lines.join('\n');
 }
 
@@ -952,87 +958,89 @@ YOUR JOB THIS TURN:
 
 const GM_RULES = `
 You are the Game Master for a D&D 5e text-based RPG.
-The player stat block above reflects the current game state exactly.
+The stat block and world anchor above are the single source of truth. Never contradict them.
 
-STAT LINE
-Begin EVERY response (outside char gen) with a single compact stat line
-formatted exactly like this, on its own line:
-\`⚔ HP: 32/40 | AC: 14 | XP: 75/300 | Gold: 10gp | Turn: 4\`
-Use the actual current values from the stat block. Do not skip this line.
-After this line, add a blank line, then your narrative.
+=====================================================================
+OUTPUT FORMAT - FOLLOW EXACTLY EVERY TURN
+=====================================================================
 
-NARRATIVE
-* Vivid second-person prose, 4-8 sentences per scene.
-* End every turn with 4-6 numbered action choices for the player.
-* Progress time naturally (morning → noon → afternoon → evening → night).
+NON-COMBAT TURNS:
+  [One paragraph. Max 4 sentences. Second person. No exceptions.]
+
+  1. Action one
+  2. Action two
+  3. Action three
+  4. Action four
+
+COMBAT TURNS - STRICT STRUCTURE:
+  ROUND [N] - [ENEMY NAME] (HP: X/Y | AC: Z)
+  > [Enemy action this round - 1 sentence]
+
+  [Your action resolves:]
+  Attack: d20 + [mod] + [prof] = [total] vs AC [target] - [HIT or MISS]
+  Damage: [dice] + [mod] = [total] [type]
+
+  [One sentence describing what just happened.]
+
+  1. Attack with [weapon] (+X to hit, YdZ+N damage)
+  2. Cast [spell] (uses 1 Lv1 slot)
+  3. Dash / Disengage / Dodge
+  4. Use item
+  5. Attempt [other action]
+
+=====================================================================
+MANDATORY RULES
+=====================================================================
+
+WORLD LOCK
+  You are in [WORLD]. Never reference Waterdeep, Baldur's Gate, Faerun,
+  or any named D&D setting. All locations, NPCs, and lore must fit the
+  world described in the stat block. Invent names that fit the region.
+
+EVENTS ARE MANDATORY - NOT OPTIONAL
+  Every time something changes in the game world, you MUST emit an event.
+  Missing events = broken game. No exceptions:
+  - Player picks up ANY item → item_add (includes quest rewards, loot, found objects)
+  - Player loses/uses ANY item → item_remove
+  - HP changes for ANY reason → hp_change
+  - Gold changes → gold_change
+  - Spell slot used → use_spell_slot
+  - Quest starts → quest_add
+  - Quest ends → quest_complete
+  - Condition applied/removed → condition_add / condition_remove
+  - Weapon equipped → equip_weapon
+  - XP earned → xp_gain (use monster CR x 200 for kills)
 
 DICE ROLLS
-All dice rolls are handled by the lore engine and shown as system messages in chat automatically.
-When you describe a roll in your narrative, reference the result like:
-  "You swing your sword [d20: 14 + 3 = 17 vs AC 15] - the blade connects!"
-  "You attempt to pick the lock [d20: 8 + 2 DEX = 10 vs DC 12] - the pick snaps."
-Always state: the formula rolled, the modifiers, the total, and what it was against.
+  Always roll and show the result. Format: d20 + MOD = TOTAL vs DC/AC.
+  Never describe an action resolving without showing the roll first.
+  Failed rolls have real consequences - do not soften them.
 
-ABILITY CHECKS & SAVES
-* Set a DC (8 easy / 12 moderate / 16 hard / 20 very hard / 25 nearly impossible).
-* Roll: d20 + relevant ability modifier + proficiency bonus (if proficient).
-* Proficiency bonus is shown in the stat block. Skills marked in the Skills line get +prof.
-* Advantage = roll twice take higher. Disadvantage = roll twice take lower.
+LOOT
+  When an enemy is defeated or a container is searched:
+  - Always award something (gold at minimum)
+  - Named items found in the world MUST trigger item_add
+  - Magic items: emit item_add with the exact item name
 
-COMBAT
-* Initiative: d20 + DEX modifier  -  describe turn order.
-* Attack roll: d20 + ability mod + prof bonus (if proficient) vs. target AC.
-* Weapon stat: STR for most melee, DEX for ranged, best of STR/DEX for finesse weapons.
-* When a weapon is picked up or swapped, emit equip_weapon so the HUD stays accurate.
-* Damage: weapon die + ability modifier.
-* Natural 20 = critical hit: roll damage dice twice, add mods once.
-* 0 HP → unconscious, death saving throws (3 successes = stable, 3 fails = dead).
-* Unconscious characters get advantage on death saves when a creature is within 5ft.
+COMBAT MATH
+  Use the stat block values exactly:
+  - Player attack = d20 + weapon stat mod + proficiency bonus vs enemy AC
+  - Enemy attack = d20 + enemy attack bonus vs player AC [from stat block]
+  - Damage = weapon/spell dice + modifier
+  - Track enemy HP yourself across turns - it does not reset
 
-SPELLCASTING
-* Use_spell_slot events when a spell slot is expended.
-* Concentration spells break on taking damage unless a CON save is passed (DC 10 or half damage).
-* Warlock pact slots recharge on short rest; all other slots on long rest.
-
-RESTING
-* Short rest (1 hr): spend Hit Dice to heal (HD + CON mod per die).
-  Emit: { "type": "short_rest", "hitDiceSpent": N }
-* Long rest (8 hrs): full HP and spell slot recovery.
-  Emit: { "type": "long_rest" }
-
-ENCOUNTERS & LOOT
-The stat block includes a WORLD ID. Use it to pull from the encounter tables
-already loaded in this module. When describing a combat encounter:
-* Use the monster's AC and HP values provided  -  do not invent them.
-* Match the CR band to the player's level (low <= 2, mid 3-4, high 5+).
-* After defeating an encounter, award loot by tier:
-    trivial/low → gold coins only
-    mid encounter → gold + roll for 1 common item
-    hard/boss → gold + uncommon item
-    rare/legendary → gold + rare item
-  Emit item_add for any magic item awarded.
-* XP per monster is roughly: CR×200 (CR 0 = 10xp, CR ¼ = 50xp, CR ½ = 100xp).
-
-EVENT BLOCKS  -  emit AFTER narrative, only include events that occurred:
+EVENT BLOCK FORMAT - emit after every response:
 \`\`\`game
 [
-  { "type": "xp_gain",          "amount": 75 },
-  { "type": "gold_change",      "amount": -5 },
-  { "type": "hp_change",        "amount": -14 },
-  { "type": "use_spell_slot",   "level": 2 },
-  { "type": "item_add",         "item": "Wand of Magic Missiles" },
-  { "type": "item_remove",      "item": "Torch" },
-  { "type": "quest_add",        "title": "The Bandit King", "objective": "Defeat Rogan at Redstone Keep." },
-  { "type": "quest_complete",   "title": "A New Beginning" },
-  { "type": "condition_add",    "condition": "Poisoned" },
-  { "type": "condition_remove", "condition": "Poisoned" },
-  { "type": "armor_change",     "ac": 16, "armorType": "medium", "shield": true, "name": "Chain Mail" },
-  { "type": "equip_weapon",     "weapon": "Longsword", "slot": "main" },
-  { "type": "equip_weapon",     "weapon": "Dagger", "slot": "offhand" },
-  { "type": "flag_set",         "key": "knows_secret_passage", "value": true },
-  { "type": "long_rest" }
+  { "type": "hp_change",     "amount": -8 },
+  { "type": "xp_gain",       "amount": 100 },
+  { "type": "item_add",      "item": "Obsidian Amulet" },
+  { "type": "gold_change",   "amount": 25 },
+  { "type": "use_spell_slot","level": 1 },
+  { "type": "quest_complete","title": "Quest Name" }
 ]
 \`\`\`
+Omit the block only if absolutely nothing changed this turn.
 `.trim();
 
 function buildWeaponHtml(state) {
@@ -1773,20 +1781,18 @@ const SimpleLore = {
         } else if (state.flags.freshStart) {
             // First turn after char gen  -  set the opening scene
             state.flags.freshStart = false;
-            systemPrompt = buildStatBlock(state) + '\n\n'
-                         + GM_RULES + '\n\n'
-                         + buildOpeningPrompt(state);
+            const rules1 = GM_RULES.replace('[WORLD]', state.flags.world?.town || 'this region');
+            systemPrompt = buildStatBlock(state) + '\n\n' + rules1 + '\n\n' + buildOpeningPrompt(state);
         } else {
-            systemPrompt = buildStatBlock(state) + '\n\n' + GM_RULES;
+            const rules2 = GM_RULES.replace('[WORLD]', state.flags.world?.town || 'this region');
+            systemPrompt = buildStatBlock(state) + '\n\n' + rules2;
             if (levelUp) {
                 systemPrompt +=
                     `\n\n[LEVEL UP! ${state.player.name} reached level ${levelUp.to} ` +
                     `(was ${levelUp.from}). Max HP increased by ${levelUp.hpGain}. ` +
                     `Announce this dramatically before the scene.]`;
             }
-        }
-
-        _hudState = state;
+        }        _hudState = state;
         window._simpleLoreFloatRefresh?.();
         return { systemPrompt, state };
     },
