@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '2.4.0';
+const VERSION = '2.4.1';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -1387,29 +1387,30 @@ function resolvePlayerAttack(state, enemyName, weaponName) {
     const miss    = atkRoll.total === 1;
     const hit     = crit || (!miss && total >= enemy.ac);
 
+    postRoll(
+        `${p.name} attacks ${enemy.name} (AC ${enemy.ac})`,
+        { display: `[d20: ${atkRoll.total} + ${sMod + prof} = ${total}] -- ${crit ? 'CRITICAL HIT' : hit ? 'HIT' : miss ? 'CRITICAL MISS' : 'MISS'}` }
+    );
+
     let damage = 0;
     let dmgDisplay = '';
     if (hit) {
-        const dice = w ? w.dice : '1d6';
+        const dice    = w ? w.dice : '1d6';
         const dmgRoll = roll(crit ? dice + '+' + dice : dice);
-        damage     = Math.max(1, dmgRoll.total + sMod);
-        enemy.hp   = Math.max(0, enemy.hp - damage);
-        dmgDisplay = `${dmgRoll.display}+${sMod}=${damage} ${w ? w.type : 'Bludgeoning'}`;
+        damage        = Math.max(1, dmgRoll.total + sMod);
+        enemy.hp      = Math.max(0, enemy.hp - damage);
+        dmgDisplay    = `${dmgRoll.display}+${sMod}=${damage} ${w ? w.type : 'Bludgeoning'}`;
+        postRoll(
+            `Damage to ${enemy.name}${crit ? ' (CRIT)' : ''}`,
+            { display: `${dmgDisplay} -- ${enemy.hp}/${enemy.maxHp} HP remaining` }
+        );
     }
 
     const result = {
-        attacker:   p.name,
-        target:     enemy.name,
-        atkRoll:    atkRoll.total,
-        modifier:   sMod + prof,
-        total,
-        targetAC:   enemy.ac,
-        hit, crit, miss,
-        damage,
-        dmgDisplay,
-        enemyHp:    enemy.hp,
-        enemyMaxHp: enemy.maxHp,
-        enemyDead:  enemy.hp <= 0,
+        attacker: p.name, target: enemy.name,
+        atkRoll: atkRoll.total, modifier: sMod + prof, total,
+        targetAC: enemy.ac, hit, crit, miss, damage, dmgDisplay,
+        enemyHp: enemy.hp, enemyMaxHp: enemy.maxHp, enemyDead: enemy.hp <= 0,
     };
 
     const line = `${p.name} attacks ${enemy.name}: d20(${atkRoll.total})+${sMod+prof}=${total} vs AC${enemy.ac} - ` +
@@ -1434,30 +1435,33 @@ function resolveEnemyAttack(state, enemyName) {
     const miss    = atkRoll.total === 1;
     const hit     = crit || (!miss && total >= p.ac);
 
+    postRoll(
+        `${enemy.name} attacks ${p.name} (AC ${p.ac})`,
+        { display: `[d20: ${atkRoll.total} + ${enemy.attackBonus} = ${total}] -- ${crit ? 'CRITICAL HIT' : hit ? 'HIT' : miss ? 'CRITICAL MISS' : 'MISS'}` }
+    );
+
     let damage = 0;
     if (hit) {
         const dmgRoll = roll(crit ? enemy.damageDice + '+' + enemy.damageDice : enemy.damageDice);
         damage = Math.max(1, dmgRoll.total);
         p.hp   = Math.max(0, p.hp - damage);
+        postRoll(
+            `${enemy.name} deals damage`,
+            { display: `${dmgRoll.display} = ${damage} -- ${p.name} at ${p.hp}/${p.maxHp} HP` }
+        );
     }
 
-    // Check for death
     if (p.hp <= 0 && !state.deathSaves) {
         state.deathSaves = { successes: 0, failures: 0 };
         state.conditions = [...(state.conditions || []).filter(c => c !== 'Unconscious'), 'Unconscious'];
+        postRoll(`${p.name} is DOWN`, { display: `Death saving throws begin` });
     }
 
     const result = {
-        attacker: enemy.name,
-        target:   p.name,
-        atkRoll:  atkRoll.total,
-        total,
-        targetAC: p.ac,
-        hit, crit, miss,
-        damage,
-        playerHp:    p.hp,
-        playerMaxHp: p.maxHp,
-        playerDown:  p.hp <= 0,
+        attacker: enemy.name, target: p.name,
+        atkRoll: atkRoll.total, total, targetAC: p.ac,
+        hit, crit, miss, damage,
+        playerHp: p.hp, playerMaxHp: p.maxHp, playerDown: p.hp <= 0,
     };
 
     const line = `${enemy.name} attacks ${p.name}: d20(${atkRoll.total})+${enemy.attackBonus}=${total} vs AC${p.ac} - ` +
@@ -1476,8 +1480,9 @@ function resolveDeathSave(state) {
     const success = r.total >= 10;
     const natural = r.total === 20;
 
+    postRoll('Death Saving Throw', { display: `[d20: ${r.total}] -- ${r.total >= 10 ? 'SUCCESS' : 'FAILURE'}${r.total === 20 ? ' (Nat 20!)' : r.total === 1 ? ' (Nat 1 - two failures!)' : ''}` });
+
     if (natural) {
-        // Nat 20 = regain 1 HP
         state.player.hp = 1;
         state.deathSaves = null;
         state.conditions = (state.conditions || []).filter(c => c !== 'Unconscious');
