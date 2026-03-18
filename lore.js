@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '2.6.0';
+const VERSION = '2.7.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -555,6 +555,45 @@ function applyEvent(state, ev) {
             }
             break;
 
+        case 'asi_apply': {
+            // Apply ASI - validate max 20, clear pending flag
+            const apply = (stat, amount) => {
+                if (!stat || !['str','dex','con','int','wis','cha'].includes(stat)) return;
+                p[stat] = Math.min(20, (p[stat] || 10) + (Number(amount) || 0));
+                if (['str','dex','con','int','wis','cha'].includes(stat)) {
+                    p.maxHp = calcMaxHP(state);
+                    p.hp    = Math.min(p.maxHp, p.hp);
+                }
+            };
+            apply(ev.stat1, ev.amount1);
+            if (ev.stat2) apply(ev.stat2, ev.amount2);
+            state.flags.pendingASI = false;
+            postRoll('ASI Applied', {
+                display: `${ev.stat1?.toUpperCase()} ${ev.stat2 ? '+ ' + ev.stat2.toUpperCase() + ' ' : ''}improved. New scores recorded.`
+            });
+            break;
+        }
+
+        case 'level_up': {
+            // Milestone leveling - direct level grant without XP
+            const targetLevel = Number(ev.level) || p.level + 1;
+            if (targetLevel <= p.level) break;
+            const oldLvl = p.level;
+            p.level      = Math.min(20, targetLevel);
+            p.maxHp      = calcMaxHP(state);
+            p.hp         = Math.min(p.maxHp, p.hp + (p.maxHp - p.maxHp));
+            if (CLASS_CASTER_TYPE[p.class]) {
+                state.spellSlots = buildSpellSlots(p.class, p.level);
+            }
+            if (isASILevel(p.class, p.level)) {
+                state.flags.pendingASI = true;
+            }
+            postRoll('Level Up!', {
+                display: `${p.name} reached level ${p.level}! ${getClassFeatures(p.class, p.level) || ''}`
+            });
+            break;
+        }
+
         // ── Inventory ───────────────────────────────────────────────────────
         case 'item_add':
             if (ev.item) state.inventory.push(ev.item);
@@ -811,24 +850,220 @@ function applyEvent(state, ev) {
 
 // ── Level Up ───────────────────────────────────────────────────────────────────
 
+
+// ── Leveling System ───────────────────────────────────────────────────────────
+// Handles ASI (Ability Score Improvement), class features, proficiency bumps,
+// and optional milestone leveling.
+
+// Levels at which each class gets an ASI (or feat)
+const ASI_LEVELS = [4, 8, 12, 16, 19];
+
+// Key class features per level - shown to GM on level up
+const CLASS_FEATURES = {
+    barbarian: {
+        2:  'Reckless Attack, Danger Sense',
+        3:  'Primal Path subclass',
+        4:  'ASI',
+        5:  'Extra Attack, Fast Movement',
+        6:  'Path feature',
+        7:  'Feral Instinct',
+        8:  'ASI',
+        9:  'Brutal Critical (1 die)',
+        10: 'Path feature',
+    },
+    bard: {
+        2:  'Jack of All Trades, Song of Rest (d6)',
+        3:  'Bard College subclass, Expertise',
+        4:  'ASI',
+        5:  'Bardic Inspiration (d8), Font of Inspiration',
+        6:  'Countercharm, College feature',
+        7:  'Nothing new',
+        8:  'ASI',
+        9:  'Song of Rest (d8)',
+        10: 'Bardic Inspiration (d10), Expertise, Magical Secrets',
+    },
+    cleric: {
+        2:  'Channel Divinity (1/rest), Divine Domain feature',
+        3:  'Nothing new',
+        4:  'ASI',
+        5:  'Destroy Undead (CR 1/2)',
+        6:  'Channel Divinity (2/rest), Divine Domain feature',
+        7:  'Nothing new',
+        8:  'ASI, Divine Domain feature, Destroy Undead (CR 1)',
+        9:  'Nothing new',
+        10: 'Divine Intervention',
+    },
+    druid: {
+        2:  'Wild Shape (CR 1/4), Druid Circle subclass',
+        3:  'Nothing new',
+        4:  'ASI, Wild Shape (CR 1/2, swim speed)',
+        5:  'Nothing new',
+        6:  'Circle feature',
+        7:  'Nothing new',
+        8:  'ASI, Wild Shape (CR 1, fly speed)',
+        9:  'Nothing new',
+        10: 'Circle feature',
+    },
+    fighter: {
+        2:  'Action Surge (1/rest)',
+        3:  'Martial Archetype subclass',
+        4:  'ASI',
+        5:  'Extra Attack',
+        6:  'ASI',
+        7:  'Archetype feature',
+        8:  'ASI',
+        9:  'Indomitable (1/long rest)',
+        10: 'Archetype feature',
+    },
+    monk: {
+        2:  'Ki (2 points), Unarmored Movement (+10ft), Flurry of Blows, Patient Defense, Step of the Wind',
+        3:  'Monastic Tradition subclass, Deflect Missiles',
+        4:  'ASI, Slow Fall',
+        5:  'Extra Attack, Stunning Strike',
+        6:  'Ki-Empowered Strikes, Tradition feature',
+        7:  'Evasion, Stillness of Mind',
+        8:  'ASI',
+        9:  'Unarmored Movement (+15ft)',
+        10: 'Purity of Body',
+    },
+    paladin: {
+        2:  'Fighting Style, Spellcasting, Divine Smite',
+        3:  'Divine Health, Sacred Oath subclass',
+        4:  'ASI',
+        5:  'Extra Attack',
+        6:  'Aura of Protection',
+        7:  'Sacred Oath feature',
+        8:  'ASI',
+        9:  'Nothing new',
+        10: 'Aura of Courage',
+    },
+    ranger: {
+        2:  'Fighting Style, Spellcasting',
+        3:  'Ranger Archetype subclass, Primeval Awareness',
+        4:  'ASI',
+        5:  'Extra Attack',
+        6:  'Favored Enemy and Natural Explorer improvements',
+        7:  'Archetype feature',
+        8:  'ASI, Land Stride',
+        9:  'Nothing new',
+        10: 'Natural Explorer improvement, Hide in Plain Sight',
+    },
+    rogue: {
+        2:  'Cunning Action',
+        3:  'Roguish Archetype subclass',
+        4:  'ASI',
+        5:  'Uncanny Dodge',
+        6:  'Expertise',
+        7:  'Evasion',
+        8:  'ASI',
+        9:  'Archetype feature',
+        10: 'ASI',
+    },
+    sorcerer: {
+        2:  'Font of Magic (Sorcery Points = level)',
+        3:  'Metamagic (2 options)',
+        4:  'ASI',
+        5:  'Nothing new',
+        6:  'Sorcerous Origin feature',
+        7:  'Nothing new',
+        8:  'ASI',
+        9:  'Nothing new',
+        10: 'Metamagic (3rd option)',
+    },
+    warlock: {
+        2:  'Eldritch Invocations (2)',
+        3:  'Pact Boon',
+        4:  'ASI',
+        5:  'Pact slot Lv3, 3rd Invocation',
+        6:  'Otherworldly Patron feature',
+        7:  'Pact slot Lv4, 4th Invocation',
+        8:  'ASI',
+        9:  'Pact slot Lv5, 5th Invocation',
+        10: 'Patron feature, 6th Invocation',
+    },
+    wizard: {
+        2:  'Arcane Tradition subclass',
+        3:  'Nothing new',
+        4:  'ASI',
+        5:  'Nothing new',
+        6:  'Arcane Tradition feature',
+        7:  'Nothing new',
+        8:  'ASI',
+        9:  'Nothing new',
+        10: 'Arcane Tradition feature',
+    },
+};
+
+// Check if this level is an ASI level for the class
+function isASILevel(cls, level) {
+    // Fighters get extra ASIs at 6, 14 and rogues at 10
+    if (cls === 'fighter' && [4,6,8,12,14,16,19].includes(level)) return true;
+    if (cls === 'rogue'   && [4,8,10,12,16,19].includes(level))   return true;
+    return ASI_LEVELS.includes(level);
+}
+
+// Get class features for a given level
+function getClassFeatures(cls, level) {
+    return CLASS_FEATURES[cls]?.[level] || null;
+}
+
+// Build the ASI prompt injected when player needs to spend their improvement
+function buildASIPrompt(state) {
+    if (!state.flags.pendingASI) return null;
+    const p = state.player;
+    const stats = ['str','dex','con','int','wis','cha'];
+    const current = stats.map(s => `${s.toUpperCase()} ${p[s]}(${sign(mod(p[s]))})`).join('  ');
+
+    return `
+ABILITY SCORE IMPROVEMENT PENDING
+${p.name} reached level ${p.level} and has an ASI to spend.
+Current scores: ${current}
+
+Options:
+  A) +2 to one ability score (max 20)
+  B) +1 to two different ability scores (max 20 each)
+
+Ask the player which they choose, then emit asi_apply.
+  { "type": "asi_apply", "stat1": "str", "amount1": 2 }
+  { "type": "asi_apply", "stat1": "str", "amount1": 1, "stat2": "dex", "amount2": 1 }
+
+Do NOT continue the adventure until the ASI is applied.
+`.trim();
+}
+
 function checkLevelUp(state) {
-    const p        = state.player;
+    const p = state.player;
+
+    // Milestone mode: level_up event handles this manually
+    if (state.flags.milestoneMode) return null;
+
     const newLevel = levelFromXP(p.xp);
     if (newLevel <= p.level) return null;
 
-    const oldLevel = p.level;
-    p.level        = newLevel;
-    const newMax   = calcMaxHP(state);
-    const hpGain   = newMax - p.maxHp;
-    p.maxHp        = newMax;
-    p.hp           = Math.min(p.maxHp, p.hp + hpGain);
+    const oldLevel  = p.level;
+    const oldPB     = pb(oldLevel);
+    p.level         = newLevel;
+    const newMax    = calcMaxHP(state);
+    const hpGain    = newMax - p.maxHp;
+    p.maxHp         = newMax;
+    p.hp            = Math.min(p.maxHp, p.hp + hpGain);
+    const newPB     = pb(newLevel);
+    const pbBumped  = newPB > oldPB;
 
-    // Rebuild spell slots at new level (preserve unused slots where possible)
+    // Rebuild spell slots
     if (CLASS_CASTER_TYPE[p.class]) {
         state.spellSlots = buildSpellSlots(p.class, p.level);
     }
 
-    return { from: oldLevel, to: newLevel, hpGain };
+    // Check for ASI
+    if (isASILevel(p.class, newLevel)) {
+        state.flags.pendingASI = true;
+    }
+
+    // Gather class features
+    const features = getClassFeatures(p.class, newLevel);
+
+    return { from: oldLevel, to: newLevel, hpGain, pbBumped, newPB, features };
 }
 
 // ── Encounter Tables (Open5e SRD, CC-BY 4.0) ─────────────────────────────────
@@ -2376,9 +2611,15 @@ function buildHudHtml(state) {
 
   ${buildSpellsHtml(state)}
 
-  <div style="margin-top:8px;display:flex;gap:6px;align-items:center;">
-    <div style="margin-top:6px;font-size:10px;color:#444;">Turn ${state.turn || 0} · simple-lore v${VERSION}</div>
+  <div style="margin-top:8px;border-top:1px solid #1a1a2e;padding-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+    <div style="font-size:10px;color:#444;">Turn ${state.turn || 0} · simple-lore v${VERSION}</div>
     <button onclick="window._simpleLoreFloatToggle?.()" style="font-size:10px;padding:2px 6px;background:#2a2a4a;border:1px solid #444;border-radius:3px;color:#aaa;cursor:pointer;margin-left:auto;">&#x26F6; Float</button>
+    <label style="font-size:10px;color:#888;cursor:pointer;display:flex;align-items:center;gap:3px;">
+      <input type="checkbox" id="sl-milestone-toggle" ${state.flags && state.flags.milestoneMode ? 'checked' : ''}
+        onchange="window._slSetMilestone?.(this.checked)"
+        style="cursor:pointer;"/>
+      Milestone XP
+    </label>
   </div>
 </div>`;
 }
@@ -2733,6 +2974,24 @@ const SimpleLore = {
             });
         };
 
+        // Milestone mode toggle
+        window._slSetMilestone = async (enabled) => {
+            if (_hudState) {
+                _hudState.flags = _hudState.flags || {};
+                _hudState.flags.milestoneMode = enabled;
+                // Persist into current session IDB slot
+                try {
+                    const ctx    = window.SillyTavern?.getContext();
+                    const chatId = ctx?.getCurrentChatId?.() || 'unknown';
+                    let charName = ctx?.characters?.[ctx?.characterId]?.name || 'unknown';
+                    const key    = `${charName}::${chatId}`;
+                    const db     = await openCharDB();
+                    const tx     = db.transaction('session_state', 'readwrite');
+                    tx.objectStore('session_state').put({ id: key, data: _hudState });
+                } catch (_) {}
+            }
+        };
+
         wireButtons();
         document.getElementById('sl-char-panel')?.parentElement
             ?.querySelector('[onclick]')
@@ -2832,10 +3091,18 @@ const SimpleLore = {
                          + restWarning
                          + shopWarning;
             if (levelUp) {
+                const featLine  = levelUp.features ? `  New features: ${levelUp.features}` : '';
+                const pbLine    = levelUp.pbBumped  ? `  Proficiency bonus now +${levelUp.newPB}!` : '';
+                const asiLine   = state.flags.pendingASI ? '  ASI PENDING - ask the player to choose stat improvements before continuing.' : '';
                 systemPrompt +=
-                    `\n\n[LEVEL UP! ${state.player.name} reached level ${levelUp.to} ` +
-                    `(was ${levelUp.from}). Max HP increased by ${levelUp.hpGain}. ` +
-                    `Announce this dramatically before the scene.]`;
+                    `\n\n[LEVEL UP! ${state.player.name} reached level ${levelUp.to}! ` +
+                    `HP +${levelUp.hpGain} (now ${state.player.hp}/${state.player.maxHp}).\n` +
+                    `${featLine}\n${pbLine}\n${asiLine}\nAnnounce this dramatically.]`;
+            }
+            // Inject ASI prompt if pending (persists until resolved)
+            if (state.flags.pendingASI) {
+                const asiPrompt = buildASIPrompt(state);
+                if (asiPrompt) systemPrompt += '\n\n' + asiPrompt;
             }
         }        _hudState = state;
         window._simpleLoreFloatRefresh?.();
