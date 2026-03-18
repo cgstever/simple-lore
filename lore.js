@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '2.7.0';
+const VERSION = '2.8.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -205,6 +205,7 @@ function defaultState() {
         equipped:   null,
         offhand:    null,
         armor:      null,
+        hitDice:    { total: 1, used: 0 },  // pool = level; recover half on long rest
         combat:     null,   // null = not in combat. See startCombat()
         deathSaves: null,   // null = alive. { successes, failures } when at 0 HP
         time:       { hour: 8, day: 1 },  // 24hr clock, starts at 8am day 1
@@ -263,6 +264,18 @@ function buildStatBlock(state) {
     if (p.skills && p.skills.length) {
         lines.push(`Skills: ${p.skills.join(', ')}`);
     }
+    // Passive Perception: 10 + WIS mod + prof if proficient in Perception
+    const percProf = (p.skills || []).some(s => s.toLowerCase() === 'perception') ? prof : 0;
+    const passivePerc = 10 + mod(p.wis) + percProf;
+    lines.push(`Passive Perception: ${passivePerc}`);
+
+    // Hit dice remaining
+    if (state.hitDice && p.class) {
+        const hdRemaining = state.hitDice.total - state.hitDice.used;
+        const hitDie = CLASSES[p.class] ? CLASSES[p.class].hitDie : 8;
+        lines.push(`Hit Dice: ${hdRemaining}/${state.hitDice.total} d${hitDie}`);
+    }
+
     lines.push(`Gold: ${goldStr}`);
 
     // Spell slots
@@ -425,6 +438,7 @@ function applyEvent(state, ev) {
                 p.maxHp  = calcMaxHP(state);
                 p.hp     = p.maxHp;
                 state.spellSlots = buildSpellSlots(key, p.level);
+                state.hitDice = { total: p.level, used: 0 };
             }
             if (ev.skills) p.skills = ev.skills;
             state.charCreation = { ...state.charCreation, classSet: true };
@@ -484,10 +498,19 @@ function applyEvent(state, ev) {
 
         case 'hp_change':
             p.hp = Math.min(p.maxHp, Math.max(0, p.hp + (Number(ev.amount) || 0)));
+            // Healing while at 0 HP clears death saves (5e PHB p.197)
+            if (p.hp > 0 && state.deathSaves) {
+                state.deathSaves = null;
+                state.conditions = (state.conditions || []).filter(c => c !== 'Unconscious');
+            }
             break;
 
         case 'hp_set':
             p.hp = Math.min(p.maxHp, Math.max(0, Number(ev.value) || 0));
+            if (p.hp > 0 && state.deathSaves) {
+                state.deathSaves = null;
+                state.conditions = (state.conditions || []).filter(c => c !== 'Unconscious');
+            }
             break;
 
         case 'gold_change':
@@ -578,16 +601,20 @@ function applyEvent(state, ev) {
             // Milestone leveling - direct level grant without XP
             const targetLevel = Number(ev.level) || p.level + 1;
             if (targetLevel <= p.level) break;
-            const oldLvl = p.level;
-            p.level      = Math.min(20, targetLevel);
-            p.maxHp      = calcMaxHP(state);
-            p.hp         = Math.min(p.maxHp, p.hp + (p.maxHp - p.maxHp));
+            const oldLvl  = p.level;
+            const oldMax  = p.maxHp;
+            p.level       = Math.min(20, targetLevel);
+            p.maxHp       = calcMaxHP(state);
+            p.hp          = Math.min(p.maxHp, p.hp + (p.maxHp - oldMax));
             if (CLASS_CASTER_TYPE[p.class]) {
                 state.spellSlots = buildSpellSlots(p.class, p.level);
             }
             if (isASILevel(p.class, p.level)) {
                 state.flags.pendingASI = true;
             }
+            // Sync hit dice pool to new level
+            if (state.hitDice) state.hitDice.total = p.level;
+            else state.hitDice = { total: p.level, used: 0 };
             postRoll('Level Up!', {
                 display: `${p.name} reached level ${p.level}! ${getClassFeatures(p.class, p.level) || ''}`
             });
@@ -729,11 +756,18 @@ function applyEvent(state, ev) {
                     Object.values(state.spellSlots).forEach(s => { s.used = 0; });
                 }
             }
+            // Recover half of total hit dice (minimum 1) per 5e rules
+            if (state.hitDice) {
+                state.hitDice.total = p.level;
+                const recover = Math.max(1, Math.floor(p.level / 2));
+                state.hitDice.used = Math.max(0, state.hitDice.used - recover);
+            }
             // Advance time by 8 hours and record rest
             advanceTime(state, LONG_REST_HOURS * 60);
             state.flags.lastLongRest  = { ...state.time };
             state.flags.lastShortRest = null;
-            postRoll('Long Rest', { display: `8 hours pass. Now ${formatTime(state.time)} Day ${state.time.day}. Full HP and slots restored.` });
+            const hdRemaining = state.hitDice ? `${state.hitDice.total - state.hitDice.used}/${state.hitDice.total}` : '';
+            postRoll('Long Rest', { display: `8 hours pass. Now ${formatTime(state.time)} Day ${state.time.day}. Full HP and slots restored.${hdRemaining ? ' HD: ' + hdRemaining : ''}` });
             break;
         }
 
@@ -748,10 +782,31 @@ function applyEvent(state, ev) {
                 state.spellSlots.pact.used = 0;
             }
             if (ev.hitDiceSpent && p.class) {
-                const healAmt = (Number(ev.hitDiceSpent) || 1) + mod(p.con);
-                const healed  = Math.min(p.maxHp - p.hp, Math.max(1, healAmt));
+                const cls       = CLASSES[p.class];
+                const requested = Math.max(1, Number(ev.hitDiceSpent) || 1);
+                // Ensure hit dice pool exists and is sized to level
+                if (!state.hitDice) state.hitDice = { total: p.level, used: 0 };
+                state.hitDice.total = p.level;
+                const available = state.hitDice.total - state.hitDice.used;
+                if (available <= 0) {
+                    state.flags.restBlocked = 'No hit dice remaining. You need a long rest to recover them.';
+                    postRoll('Short Rest', { display: `No hit dice available to spend.` });
+                    advanceTime(state, SHORT_REST_HOURS * 60);
+                    state.flags.lastShortRest = { ...state.time };
+                    break;
+                }
+                const numDice = Math.min(requested, available);
+                const conMod  = mod(p.con);
+                let healAmt   = 0;
+                for (let i = 0; i < numDice; i++) {
+                    const r = roll(`1d${cls ? cls.hitDie : 8}`);
+                    healAmt += Math.max(1, r.total + conMod);
+                }
+                state.hitDice.used += numDice;
+                const healed  = Math.min(p.maxHp - p.hp, healAmt);
                 p.hp = Math.min(p.maxHp, p.hp + healed);
-                postRoll('Short Rest', { display: `1 hour passes. Spent ${ev.hitDiceSpent} HD. Healed ${healed}HP. Now at ${p.hp}/${p.maxHp}HP.` });
+                const remaining = state.hitDice.total - state.hitDice.used;
+                postRoll('Short Rest', { display: `1 hour passes. Spent ${numDice} HD (d${cls ? cls.hitDie : 8}+${conMod} each). Healed ${healed}HP. Now at ${p.hp}/${p.maxHp}HP. HD remaining: ${remaining}/${state.hitDice.total}` });
             } else {
                 postRoll('Short Rest', { display: `1 hour passes. Now ${formatTime(state.time)}.` });
             }
@@ -1060,6 +1115,10 @@ function checkLevelUp(state) {
         state.flags.pendingASI = true;
     }
 
+    // Sync hit dice pool to new level
+    if (state.hitDice) state.hitDice.total = newLevel;
+    else state.hitDice = { total: newLevel, used: 0 };
+
     // Gather class features
     const features = getClassFeatures(p.class, newLevel);
 
@@ -1163,13 +1222,13 @@ const WEAPONS = {
     'Club':           { dice: '1d4',  type: 'Bludgeoning', simple: true,  range: 0,   stat: 'str',  props: ['Light'] },
     'Dagger':         { dice: '1d4',  type: 'Piercing',    simple: true,  range: 20,  stat: 'best', props: ['Finesse','Light','Thrown 20/60'] },
     'Greatclub':      { dice: '1d8',  type: 'Bludgeoning', simple: true,  range: 0,   stat: 'str',  props: ['Two-Handed'] },
-    'Handaxe':        { dice: '1d6',  type: 'Slashing',    simple: true,  range: 20,  stat: 'dex',  props: ['Light','Thrown 20/60'] },
-    'Javelin':        { dice: '1d6',  type: 'Piercing',    simple: true,  range: 30,  stat: 'dex',  props: ['Thrown 30/120'] },
-    'Light Hammer':   { dice: '1d4',  type: 'Bludgeoning', simple: true,  range: 20,  stat: 'dex',  props: ['Light','Thrown 20/60'] },
+    'Handaxe':        { dice: '1d6',  type: 'Slashing',    simple: true,  range: 20,  stat: 'str',  props: ['Light','Thrown 20/60'] },
+    'Javelin':        { dice: '1d6',  type: 'Piercing',    simple: true,  range: 30,  stat: 'str',  props: ['Thrown 30/120'] },
+    'Light Hammer':   { dice: '1d4',  type: 'Bludgeoning', simple: true,  range: 20,  stat: 'str',  props: ['Light','Thrown 20/60'] },
     'Mace':           { dice: '1d6',  type: 'Bludgeoning', simple: true,  range: 0,   stat: 'str',  props: [] },
     'Quarterstaff':   { dice: '1d6',  type: 'Bludgeoning', simple: true,  range: 0,   stat: 'str',  props: ['Versatile 1d8'] },
     'Sickle':         { dice: '1d4',  type: 'Slashing',    simple: true,  range: 0,   stat: 'str',  props: ['Light'] },
-    'Spear':          { dice: '1d6',  type: 'Piercing',    simple: true,  range: 20,  stat: 'dex',  props: ['Thrown 20/60','Versatile 1d8'] },
+    'Spear':          { dice: '1d6',  type: 'Piercing',    simple: true,  range: 20,  stat: 'str',  props: ['Thrown 20/60','Versatile 1d8'] },
     'Light Crossbow': { dice: '1d8',  type: 'Piercing',    simple: true,  range: 80,  stat: 'dex',  props: ['Ammunition','Loading','Two-Handed'] },
     'Shortbow':       { dice: '1d6',  type: 'Piercing',    simple: true,  range: 80,  stat: 'dex',  props: ['Ammunition','Two-Handed'] },
     'Sling':          { dice: '1d4',  type: 'Bludgeoning', simple: true,  range: 30,  stat: 'dex',  props: ['Ammunition'] },
@@ -1186,7 +1245,7 @@ const WEAPONS = {
     'Rapier':         { dice: '1d8',  type: 'Piercing',    simple: false, range: 0,   stat: 'best', props: ['Finesse'] },
     'Scimitar':       { dice: '1d6',  type: 'Slashing',    simple: false, range: 0,   stat: 'best', props: ['Finesse','Light'] },
     'Shortsword':     { dice: '1d6',  type: 'Piercing',    simple: false, range: 0,   stat: 'best', props: ['Finesse','Light'] },
-    'Trident':        { dice: '1d8',  type: 'Piercing',    simple: false, range: 20,  stat: 'dex',  props: ['Thrown 20/60','Versatile 1d10'] },
+    'Trident':        { dice: '1d8',  type: 'Piercing',    simple: false, range: 20,  stat: 'str',  props: ['Thrown 20/60','Versatile 1d10'] },
     'War Pick':       { dice: '1d8',  type: 'Piercing',    simple: false, range: 0,   stat: 'str',  props: ['Versatile 1d10'] },
     'Warhammer':      { dice: '1d8',  type: 'Bludgeoning', simple: false, range: 0,   stat: 'str',  props: ['Versatile 1d10'] },
     'Whip':           { dice: '1d4',  type: 'Slashing',    simple: false, range: 0,   stat: 'best', props: ['Finesse','Reach'] },
@@ -1653,7 +1712,8 @@ function startCombat(state, enemies) {
     const initiatives = [{ name: state.player.name, roll: playerInit, isPlayer: true }];
 
     for (const e of enemies) {
-        const eInit = d20().total + Math.floor((e.cr || 0));
+        // Use dexMod if provided, otherwise estimate +1 for most monsters
+        const eInit = d20().total + (e.dexMod != null ? e.dexMod : 1);
         initiatives.push({ name: e.name, roll: eInit, isPlayer: false });
     }
     initiatives.sort((a, b) => b.roll - a.roll);
@@ -1705,7 +1765,13 @@ function resolvePlayerAttack(state, enemyName, weaponName) {
     let dmgDisplay = '';
     if (hit) {
         const dice    = w ? w.dice : '1d6';
-        const dmgRoll = roll(crit ? dice + '+' + dice : dice);
+        // On crit, double the number of dice (e.g. 1d8 -> 2d8, 2d6 -> 4d6)
+        let critDice  = dice;
+        if (crit) {
+            const dm = dice.match(/^(\d+)d(\d+)(.*)$/i);
+            critDice = dm ? `${parseInt(dm[1]) * 2}d${dm[2]}${dm[3] || ''}` : dice + '+' + dice;
+        }
+        const dmgRoll = roll(crit ? critDice : dice);
         damage        = Math.max(1, dmgRoll.total + sMod);
         enemy.hp      = Math.max(0, enemy.hp - damage);
         dmgDisplay    = `${dmgRoll.display}+${sMod}=${damage} ${w ? w.type : 'Bludgeoning'}`;
@@ -1751,7 +1817,12 @@ function resolveEnemyAttack(state, enemyName) {
 
     let damage = 0;
     if (hit) {
-        const dmgRoll = roll(crit ? enemy.damageDice + '+' + enemy.damageDice : enemy.damageDice);
+        let eCritDice = enemy.damageDice;
+        if (crit) {
+            const em = enemy.damageDice.match(/^(\d+)d(\d+)(.*)$/i);
+            eCritDice = em ? `${parseInt(em[1]) * 2}d${em[2]}${em[3] || ''}` : enemy.damageDice + '+' + enemy.damageDice;
+        }
+        const dmgRoll = roll(crit ? eCritDice : enemy.damageDice);
         damage = Math.max(1, dmgRoll.total);
         p.hp   = Math.max(0, p.hp - damage);
         postRoll(
@@ -1988,16 +2059,26 @@ function addCopper(player, copperAmount) {
 }
 
 function getItemPrice(itemName) {
-    // Exact match first
+    // Exact match first (case-sensitive)
     if (PRICES[itemName] != null) return PRICES[itemName];
-    // Fuzzy match
+    // Case-insensitive exact match
     const lower = itemName.toLowerCase();
     for (const [name, price] of Object.entries(PRICES)) {
-        if (name.toLowerCase().includes(lower) || lower.includes(name.toLowerCase())) {
-            return price;
+        if (name.toLowerCase() === lower) return price;
+    }
+    // Fuzzy match: prefer shortest matching name to avoid "Chain" → "Chain Mail" when "Chain Shirt" exists
+    let bestMatch = null;
+    let bestLen   = Infinity;
+    for (const [name, price] of Object.entries(PRICES)) {
+        const nameLower = name.toLowerCase();
+        if (nameLower.includes(lower) || lower.includes(nameLower)) {
+            if (name.length < bestLen) {
+                bestMatch = price;
+                bestLen   = name.length;
+            }
         }
     }
-    return null;
+    return bestMatch;
 }
 
 function isAvailableInShop(itemName, worldId) {
