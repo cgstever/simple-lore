@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '2.4.1';
+const VERSION = '2.5.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -628,10 +628,17 @@ function applyEvent(state, ev) {
             break;
 
         // ── Rests ───────────────────────────────────────────────────────────
-        case 'long_rest':
+        case 'long_rest': {
+            const lrCheck = canLongRest(state);
+            if (!lrCheck.ok) {
+                // Block illegal rest - log it so GM sees it next turn
+                state.flags.restBlocked = lrCheck.reason;
+                break;
+            }
+            state.flags.restBlocked = null;
             p.hp = p.maxHp;
-            state.conditions = state.conditions.filter(c =>
-                !['Poisoned','Blinded','Deafened','Prone'].includes(c));
+            state.conditions = (state.conditions || []).filter(c =>
+                !['Poisoned','Blinded','Deafened','Prone','Exhaustion 1'].includes(c));
             if (state.spellSlots) {
                 if (state.spellSlots.pact) {
                     state.spellSlots.pact.used = 0;
@@ -639,17 +646,40 @@ function applyEvent(state, ev) {
                     Object.values(state.spellSlots).forEach(s => { s.used = 0; });
                 }
             }
+            // Advance time by 8 hours and record rest
+            advanceTime(state, LONG_REST_HOURS * 60);
+            state.flags.lastLongRest  = { ...state.time };
+            state.flags.lastShortRest = null;
+            postRoll('Long Rest', { display: `8 hours pass. Now ${formatTime(state.time)} Day ${state.time.day}. Full HP and slots restored.` });
             break;
+        }
 
-        case 'short_rest':
+        case 'short_rest': {
+            const srCheck = canShortRest(state);
+            if (!srCheck.ok) {
+                state.flags.restBlocked = srCheck.reason;
+                break;
+            }
+            state.flags.restBlocked = null;
             if (state.spellSlots && state.spellSlots.pact) {
-                state.spellSlots.pact.used = 0; // warlock slots on short rest
+                state.spellSlots.pact.used = 0;
             }
             if (ev.hitDiceSpent && p.class) {
-                const cls     = CLASSES[p.class];
                 const healAmt = (Number(ev.hitDiceSpent) || 1) + mod(p.con);
-                p.hp = Math.min(p.maxHp, p.hp + Math.max(1, healAmt));
+                const healed  = Math.min(p.maxHp - p.hp, Math.max(1, healAmt));
+                p.hp = Math.min(p.maxHp, p.hp + healed);
+                postRoll('Short Rest', { display: `1 hour passes. Spent ${ev.hitDiceSpent} HD. Healed ${healed}HP. Now at ${p.hp}/${p.maxHp}HP.` });
+            } else {
+                postRoll('Short Rest', { display: `1 hour passes. Now ${formatTime(state.time)}.` });
             }
+            advanceTime(state, SHORT_REST_HOURS * 60);
+            state.flags.lastShortRest = { ...state.time };
+            break;
+        }
+
+        case 'time_advance':
+            // Explicit time advance (travel, waiting, etc.)
+            advanceTime(state, Number(ev.minutes) || MINUTES_PER_TURN);
             break;
 
         // ── Misc ────────────────────────────────────────────────────────────
@@ -1567,6 +1597,83 @@ function buildCombatBlock(state) {
         `- If the player reaches 0 HP emit death_save next turn instead of actions.`,
         `- If all enemies are at 0 HP emit combat_end.`,
     ].filter(l => l !== undefined).join('\n');
+}
+
+
+// ── Time Engine ───────────────────────────────────────────────────────────────
+// Tracks 24hr clock and day count. Advances automatically each turn.
+// Controls rest legality and encounter probability.
+//
+// state.time = { hour: 0-23, day: 1 }
+// MINUTES_PER_TURN: how much time passes each narrative turn (default 30min)
+
+const MINUTES_PER_TURN = 30;   // adjust if game feels too fast/slow
+const LONG_REST_HOURS  = 8;    // hours required for a long rest
+const SHORT_REST_HOURS = 1;    // hours required for a short rest
+
+// Valid long rest window: 20:00 - 06:00 (can only long rest at night/dawn)
+// Short rest: any time outside combat
+function canLongRest(state) {
+    if (state.combat?.active) return { ok: false, reason: 'Cannot rest during combat.' };
+    const h = state.time?.hour ?? 8;
+    if (h >= 6 && h < 20) return { ok: false, reason: `It is ${formatTime(state.time)} - too early to make camp. Wait until evening.` };
+    if (state.flags.lastLongRest) {
+        const hoursSince = hoursBetween(state.flags.lastLongRest, state.time);
+        if (hoursSince < 16) return { ok: false, reason: `You rested ${Math.floor(hoursSince)}hrs ago - need at least 16hrs between long rests.` };
+    }
+    return { ok: true };
+}
+
+function canShortRest(state) {
+    if (state.combat?.active) return { ok: false, reason: 'Cannot rest during combat.' };
+    if (state.flags.lastShortRest) {
+        const hoursSince = hoursBetween(state.flags.lastShortRest, state.time);
+        if (hoursSince < 1) return { ok: false, reason: 'You need at least 1 hour between short rests.' };
+    }
+    return { ok: true };
+}
+
+function formatTime(time) {
+    if (!time) return '08:00';
+    const h = time.hour ?? 8;
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12  = h % 12 || 12;
+    return `${h12}:00 ${ampm}`;
+}
+
+function timeOfDay(time) {
+    const h = time?.hour ?? 8;
+    if (h >= 5  && h < 8)  return 'Dawn';
+    if (h >= 8  && h < 12) return 'Morning';
+    if (h >= 12 && h < 14) return 'Noon';
+    if (h >= 14 && h < 17) return 'Afternoon';
+    if (h >= 17 && h < 20) return 'Evening';
+    if (h >= 20 && h < 22) return 'Dusk';
+    return 'Night';
+}
+
+function advanceTime(state, minutes) {
+    if (!state.time) state.time = { hour: 8, day: 1 };
+    const totalMins  = (state.time.hour * 60) + (minutes || MINUTES_PER_TURN);
+    state.time.hour  = Math.floor(totalMins / 60) % 24;
+    const daysPassed = Math.floor(totalMins / (24 * 60));
+    if (daysPassed > 0) state.time.day = (state.time.day || 1) + daysPassed;
+}
+
+function hoursBetween(savedTime, currentTime) {
+    if (!savedTime || !currentTime) return 99;
+    const savedTotal   = (savedTime.day   || 1) * 24 + (savedTime.hour   || 0);
+    const currentTotal = (currentTime.day || 1) * 24 + (currentTime.hour || 0);
+    return currentTotal - savedTotal;
+}
+
+function buildTimeBlock(state) {
+    const t    = state.time || { hour: 8, day: 1 };
+    const tod  = timeOfDay(t);
+    const fmt  = formatTime(t);
+    const canLR = canLongRest(state);
+    const canSR = canShortRest(state);
+    return `TIME: Day ${t.day}  ${fmt}  (${tod})  |  Long rest: ${canLR.ok ? 'available' : 'unavailable'}  Short rest: ${canSR.ok ? 'available' : 'unavailable'}`;
 }
 
 // ── Companion Block ───────────────────────────────────────────────────────────
@@ -2493,6 +2600,10 @@ const SimpleLore = {
 
         state.turn      = (state.turn || 0) + 1;
         state.player.ac = calcAC(state);
+        // Advance time each turn unless in active combat (combat time handled per round)
+        if (!state.combat?.active && state.turn > 1) {
+            advanceTime(state, MINUTES_PER_TURN);
+        }
 
         const levelUp = checkLevelUp(state);
 
@@ -2514,9 +2625,13 @@ const SimpleLore = {
             const rules2 = GM_RULES.replace('[WORLD]', state.flags.world?.town || 'this region');
             const companionBlock2 = buildCompanionBlock(systemText, state);
             const combatBlock2    = buildCombatBlock(state);
+            const restWarning     = state.flags.restBlocked
+                ? `\n\nREST BLOCKED: ${state.flags.restBlocked} Tell the player this and clear state.flags.restBlocked.`
+                : '';
             systemPrompt = buildStatBlock(state) + '\n\n' + buildQuestAnchor(state) + '\n\n' + rules2
                          + (combatBlock2    ? '\n\n' + combatBlock2    : '')
-                         + (companionBlock2 ? '\n\n' + companionBlock2 : '');
+                         + (companionBlock2 ? '\n\n' + companionBlock2 : '')
+                         + restWarning;
             if (levelUp) {
                 systemPrompt +=
                     `\n\n[LEVEL UP! ${state.player.name} reached level ${levelUp.to} ` +
