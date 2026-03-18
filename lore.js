@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '2.3.0';
+const VERSION = '2.4.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -193,8 +193,8 @@ function defaultState() {
             str: 10, dex: 10, con: 10,
             int: 10, wis: 10, cha: 10,
             ac:    10,
-            saves:  [],   // proficient saving throw stats e.g. ['str','con']
-            skills: [],   // proficient skill names
+            saves:  [],
+            skills: [],
             speed:  30,
             gold: 0, silver: 0, copper: 0,
         },
@@ -202,9 +202,12 @@ function defaultState() {
         quests:     [],
         conditions: [],
         spellSlots: null,
-        equipped:   null,   // main hand weapon name
-        offhand:    null,   // off hand weapon or shield
-        armor:      null,   // armor name for display
+        equipped:   null,
+        offhand:    null,
+        armor:      null,
+        combat:     null,   // null = not in combat. See startCombat()
+        deathSaves: null,   // null = alive. { successes, failures } when at 0 HP
+        time:       { hour: 8, day: 1 },  // 24hr clock, starts at 8am day 1
         flags:      {},
         turn:       0,
         charCreation: { step: 'intro' },
@@ -650,6 +653,70 @@ function applyEvent(state, ev) {
             break;
 
         // ── Misc ────────────────────────────────────────────────────────────
+        case 'combat_start': {
+            // AI tells us what enemies to fight - module runs the actual math
+            const enemies = Array.isArray(ev.enemies) ? ev.enemies : [];
+            // Look up enemy stats from encounter tables if not provided
+            const worldId = state.flags.world?.id;
+            const resolved = enemies.map(e => {
+                if (e.hp && e.ac) return e; // AI provided full stats
+                const found = pickEncounter(worldId, state.player.level);
+                return found ? { ...found, ...e } : { name: e.name || 'Enemy', hp: 10, ac: 12, cr: 1, damageDice: '1d6' };
+            });
+            startCombat(state, resolved);
+            break;
+        }
+
+        case 'combat_attack': {
+            // Module resolves the attack roll - AI just triggers it
+            const weaponName = ev.weapon || state.equipped || 'Unarmed';
+            const target     = ev.target || state.combat?.enemies[0]?.name || '';
+            if (state.combat?.active) {
+                resolvePlayerAttack(state, target, weaponName);
+            }
+            break;
+        }
+
+        case 'enemy_attack': {
+            // Module resolves enemy attack against player
+            const attacker = ev.attacker || state.combat?.enemies.find(e => e.hp > 0)?.name || '';
+            if (state.combat?.active) {
+                resolveEnemyAttack(state, attacker);
+            }
+            break;
+        }
+
+        case 'enemy_hp': {
+            // Direct enemy HP adjustment (for spells, traps, etc. where we skip attack roll)
+            const enemy = state.combat?.enemies.find(e =>
+                e.name.toLowerCase().includes((ev.name || '').toLowerCase()));
+            if (enemy) {
+                enemy.hp = Math.max(0, enemy.hp + (Number(ev.amount) || 0));
+                const line = `${ev.name} takes ${Math.abs(ev.amount)} damage (${enemy.hp}/${enemy.maxHp}HP)`;
+                state.combat.log.push(line);
+                if (state.combat.log.length > 6) state.combat.log.shift();
+            }
+            break;
+        }
+
+        case 'combat_end':
+            endCombat(state);
+            break;
+
+        case 'next_round':
+            if (state.combat) state.combat.round += 1;
+            break;
+
+        case 'death_save':
+            resolveDeathSave(state);
+            break;
+
+        case 'stabilize':
+            state.deathSaves = null;
+            state.player.hp  = 1;
+            state.conditions = (state.conditions || []).filter(c => c !== 'Unconscious');
+            break;
+
         case 'companion_hp':
             if (state.companion) {
                 state.companion.hp = Math.min(
@@ -1258,6 +1325,245 @@ YOUR JOB THIS TURN:
 
 
 
+// ── Combat Engine ─────────────────────────────────────────────────────────────
+// The module owns all combat math. The AI narrates, emits events, and describes
+// outcomes — but the actual d20 rolls, damage, and tracking happen here.
+//
+// Combat state shape:
+// state.combat = {
+//   active:     true,
+//   round:      1,
+//   enemies:    [{ name, hp, maxHp, ac, cr, attackBonus, damageDice }],
+//   initiative: [{ name, roll, isPlayer }],  // sorted high to low
+//   log:        string[]   // last few roll results for GM context
+// }
+
+function startCombat(state, enemies) {
+    // Roll initiative for player and all enemies
+    const playerInit = d20().total + mod(state.player.dex);
+    const initiatives = [{ name: state.player.name, roll: playerInit, isPlayer: true }];
+
+    for (const e of enemies) {
+        const eInit = d20().total + Math.floor((e.cr || 0));
+        initiatives.push({ name: e.name, roll: eInit, isPlayer: false });
+    }
+    initiatives.sort((a, b) => b.roll - a.roll);
+
+    state.combat = {
+        active:     true,
+        round:      1,
+        enemies:    enemies.map(e => ({
+            name:        e.name,
+            hp:          e.hp,
+            maxHp:       e.hp,
+            ac:          e.ac,
+            cr:          e.cr || 0,
+            attackBonus: Math.round((e.cr || 0) * 0.5) + 2,  // approx CR to attack bonus
+            damageDice:  e.damageDice || '1d6',
+        })),
+        initiative: initiatives,
+        log:        [`Round 1 initiative: ${initiatives.map(i => `${i.name}(${i.roll})`).join(', ')}`],
+    };
+    return state.combat;
+}
+
+function endCombat(state) {
+    state.combat    = null;
+    state.deathSaves = null;
+}
+
+// Roll a player attack against a specific enemy
+function resolvePlayerAttack(state, enemyName, weaponName) {
+    const p       = state.player;
+    const enemy   = state.combat?.enemies.find(e => e.name.toLowerCase().includes(enemyName.toLowerCase()));
+    if (!enemy) return null;
+
+    const w       = WEAPONS[weaponName] || null;
+    const sMod    = w ? weaponStatMod(w, p) : mod(p.str);
+    const prof    = pb(p.level);
+    const atkRoll = d20();
+    const total   = atkRoll.total + sMod + prof;
+    const crit    = atkRoll.total === 20;
+    const miss    = atkRoll.total === 1;
+    const hit     = crit || (!miss && total >= enemy.ac);
+
+    let damage = 0;
+    let dmgDisplay = '';
+    if (hit) {
+        const dice = w ? w.dice : '1d6';
+        const dmgRoll = roll(crit ? dice + '+' + dice : dice);
+        damage     = Math.max(1, dmgRoll.total + sMod);
+        enemy.hp   = Math.max(0, enemy.hp - damage);
+        dmgDisplay = `${dmgRoll.display}+${sMod}=${damage} ${w ? w.type : 'Bludgeoning'}`;
+    }
+
+    const result = {
+        attacker:   p.name,
+        target:     enemy.name,
+        atkRoll:    atkRoll.total,
+        modifier:   sMod + prof,
+        total,
+        targetAC:   enemy.ac,
+        hit, crit, miss,
+        damage,
+        dmgDisplay,
+        enemyHp:    enemy.hp,
+        enemyMaxHp: enemy.maxHp,
+        enemyDead:  enemy.hp <= 0,
+    };
+
+    const line = `${p.name} attacks ${enemy.name}: d20(${atkRoll.total})+${sMod+prof}=${total} vs AC${enemy.ac} - ` +
+        (crit ? `CRITICAL HIT! ${dmgDisplay}` : hit ? `HIT ${dmgDisplay}` : `MISS`) +
+        (result.enemyDead ? ` - ${enemy.name} DEFEATED` : ` (${enemy.hp}/${enemy.maxHp}HP)`);
+    state.combat.log.push(line);
+    if (state.combat.log.length > 6) state.combat.log.shift();
+
+    return result;
+}
+
+// Roll an enemy attack against the player
+function resolveEnemyAttack(state, enemyName) {
+    const p     = state.player;
+    const enemy = state.combat?.enemies.find(e =>
+        e.name.toLowerCase().includes(enemyName.toLowerCase()) && e.hp > 0);
+    if (!enemy) return null;
+
+    const atkRoll = d20();
+    const total   = atkRoll.total + enemy.attackBonus;
+    const crit    = atkRoll.total === 20;
+    const miss    = atkRoll.total === 1;
+    const hit     = crit || (!miss && total >= p.ac);
+
+    let damage = 0;
+    if (hit) {
+        const dmgRoll = roll(crit ? enemy.damageDice + '+' + enemy.damageDice : enemy.damageDice);
+        damage = Math.max(1, dmgRoll.total);
+        p.hp   = Math.max(0, p.hp - damage);
+    }
+
+    // Check for death
+    if (p.hp <= 0 && !state.deathSaves) {
+        state.deathSaves = { successes: 0, failures: 0 };
+        state.conditions = [...(state.conditions || []).filter(c => c !== 'Unconscious'), 'Unconscious'];
+    }
+
+    const result = {
+        attacker: enemy.name,
+        target:   p.name,
+        atkRoll:  atkRoll.total,
+        total,
+        targetAC: p.ac,
+        hit, crit, miss,
+        damage,
+        playerHp:    p.hp,
+        playerMaxHp: p.maxHp,
+        playerDown:  p.hp <= 0,
+    };
+
+    const line = `${enemy.name} attacks ${p.name}: d20(${atkRoll.total})+${enemy.attackBonus}=${total} vs AC${p.ac} - ` +
+        (crit ? `CRITICAL HIT! ${damage}dmg` : hit ? `HIT ${damage}dmg` : `MISS`) +
+        (result.playerDown ? ' - PLAYER DOWN' : ` (${p.hp}/${p.maxHp}HP)`);
+    state.combat.log.push(line);
+    if (state.combat.log.length > 6) state.combat.log.shift();
+
+    return result;
+}
+
+// Roll a death saving throw
+function resolveDeathSave(state) {
+    if (!state.deathSaves) return null;
+    const r       = d20();
+    const success = r.total >= 10;
+    const natural = r.total === 20;
+
+    if (natural) {
+        // Nat 20 = regain 1 HP
+        state.player.hp = 1;
+        state.deathSaves = null;
+        state.conditions = (state.conditions || []).filter(c => c !== 'Unconscious');
+        return { roll: r.total, success: true, natural20: true, message: 'Nat 20 - regain 1 HP!' };
+    }
+    if (r.total === 1) {
+        // Nat 1 = two failures
+        state.deathSaves.failures += 2;
+    } else if (success) {
+        state.deathSaves.successes += 1;
+    } else {
+        state.deathSaves.failures += 1;
+    }
+
+    const dead   = state.deathSaves.failures >= 3;
+    const stable = state.deathSaves.successes >= 3;
+
+    if (dead) {
+        state.conditions = [...(state.conditions || []).filter(c => c !== 'Unconscious'), 'Dead'];
+        state.deathSaves = null;
+    } else if (stable) {
+        state.deathSaves = null;
+        state.conditions = (state.conditions || []).filter(c => c !== 'Unconscious');
+    }
+
+    return {
+        roll:       r.total,
+        success,
+        successes:  state.deathSaves?.successes ?? (stable ? 3 : 0),
+        failures:   state.deathSaves?.failures  ?? (dead   ? 3 : 0),
+        stable,
+        dead,
+        message:    r.total === 1   ? 'Nat 1 - two failures!'
+                  : stable          ? 'Stable!'
+                  : dead            ? 'Dead.'
+                  : success         ? `Success (${state.deathSaves?.successes}/3)`
+                  : `Failure (${state.deathSaves?.failures}/3)`,
+    };
+}
+
+// Build the combat status line injected into the system prompt every combat turn
+function buildCombatBlock(state) {
+    if (!state.combat?.active) return null;
+
+    const c     = state.combat;
+    const alive = c.enemies.filter(e => e.hp > 0);
+    const dead  = c.enemies.filter(e => e.hp <= 0);
+
+    const initOrder = c.initiative
+        .map(i => `${i.name}(${i.roll})${i.isPlayer ? '*' : ''}`)
+        .join(' > ');
+
+    const enemyLines = alive.map(e =>
+        `  ${e.name}: HP ${e.hp}/${e.maxHp}  AC ${e.ac}  ATK +${e.attackBonus}  DMG ${e.damageDice}`
+    ).join('\n');
+
+    const deadLines = dead.length
+        ? `  Defeated: ${dead.map(e => e.name).join(', ')}`
+        : '';
+
+    const deathLine = state.deathSaves
+        ? `\nDEATH SAVES: ${state.deathSaves.successes} successes / ${state.deathSaves.failures} failures (need 3 to stabilize)`
+        : '';
+
+    const logLines = c.log.slice(-4).map(l => `  ${l}`).join('\n');
+
+    return [
+        `COMBAT ACTIVE - Round ${c.round}`,
+        `Initiative: ${initOrder}  (* = player)`,
+        ``,
+        `ENEMIES:`,
+        enemyLines,
+        deadLines,
+        deathLine,
+        ``,
+        `RECENT ROLLS:`,
+        logLines,
+        ``,
+        `COMBAT RULES THIS TURN:`,
+        `- Use the enemy stats above EXACTLY. Do not invent AC or HP.`,
+        `- Emit combat_attack for each attack that happens this turn.`,
+        `- If the player reaches 0 HP emit death_save next turn instead of actions.`,
+        `- If all enemies are at 0 HP emit combat_end.`,
+    ].filter(l => l !== undefined).join('\n');
+}
+
 // ── Companion Block ───────────────────────────────────────────────────────────
 // Reads the ST character card (systemText) and injects it as a companion NPC.
 // The companion travels with the player, is roleplayed by the GM, and has their
@@ -1362,20 +1668,29 @@ NON-COMBAT TURNS:
   4. Action four
 
 COMBAT TURNS - STRICT STRUCTURE:
-  ROUND [N] - [ENEMY NAME] (HP: X/Y | AC: Z)
-  > [Enemy action this round - 1 sentence]
+  The COMBAT BLOCK above shows live enemy HP, AC, and recent rolls computed by the engine.
+  Use those exact numbers. Do not invent HP or AC.
 
-  [Your action resolves:]
-  Attack: d20 + [mod] + [prof] = [total] vs AC [target] - [HIT or MISS]
-  Damage: [dice] + [mod] = [total] [type]
+  Each combat turn format:
+  ROUND [N]
+  [Enemy action - 1 sentence. Emit enemy_attack for the enemy whose turn it is.]
+  [Player action result - 1 sentence based on the roll the engine computed.]
+  [One sentence consequence.]
 
-  [One sentence describing what just happened.]
+  1. Attack with [weapon] - emit combat_attack {"weapon":"X","target":"Y"}
+  2. Cast [spell] (uses 1 slot) - emit use_spell_slot + enemy_hp for damage
+  3. Dash / Disengage / Dodge - no attack this turn
+  4. Use item - emit item_remove
+  5. [Other]
 
-  1. Attack with [weapon] (+X to hit, YdZ+N damage)
-  2. Cast [spell] (uses 1 Lv1 slot)
-  3. Dash / Disengage / Dodge
-  4. Use item
-  5. Attempt [other action]
+  COMBAT EVENTS (the engine rolls the dice - just emit the trigger):
+  Start combat:  {"type":"combat_start","enemies":[{"name":"Goblin","hp":7,"ac":15,"cr":0.25,"damageDice":"1d6"}]}
+  Player attack: {"type":"combat_attack","weapon":"Longsword","target":"Goblin"}
+  Enemy attack:  {"type":"enemy_attack","attacker":"Goblin"}
+  Direct damage: {"type":"enemy_hp","name":"Goblin","amount":-8}
+  Next round:    {"type":"next_round"}
+  End combat:    {"type":"combat_end"}
+  Death save:    {"type":"death_save"}  (emit when player is at 0 HP instead of action choices)
 
 =====================================================================
 MANDATORY RULES
@@ -2185,13 +2500,17 @@ const SimpleLore = {
             state.flags.freshStart = false;
             const rules1 = GM_RULES.replace('[WORLD]', state.flags.world?.town || 'this region');
             const companionBlock1 = buildCompanionBlock(systemText, state);
+            const combatBlock1    = buildCombatBlock(state);
             systemPrompt = buildStatBlock(state) + '\n\n' + buildQuestAnchor(state) + '\n\n' + rules1
+                         + (combatBlock1    ? '\n\n' + combatBlock1    : '')
                          + (companionBlock1 ? '\n\n' + companionBlock1 : '')
                          + '\n\n' + buildOpeningPrompt(state);
         } else {
             const rules2 = GM_RULES.replace('[WORLD]', state.flags.world?.town || 'this region');
             const companionBlock2 = buildCompanionBlock(systemText, state);
+            const combatBlock2    = buildCombatBlock(state);
             systemPrompt = buildStatBlock(state) + '\n\n' + buildQuestAnchor(state) + '\n\n' + rules2
+                         + (combatBlock2    ? '\n\n' + combatBlock2    : '')
                          + (companionBlock2 ? '\n\n' + companionBlock2 : '');
             if (levelUp) {
                 systemPrompt +=
