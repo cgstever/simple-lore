@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '2.5.0';
+const VERSION = '2.6.0';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -501,6 +501,50 @@ function applyEvent(state, ev) {
         case 'copper_change':
             p.copper = Math.max(0, (p.copper || 0) + (Number(ev.amount) || 0));
             break;
+
+        case 'buy_item': {
+            const itemName = ev.item || '';
+            const qty      = Math.max(1, Number(ev.quantity) || 1);
+            const worldId  = state.flags.world?.id;
+            const price    = getItemPrice(itemName);
+            const inShop   = isAvailableInShop(itemName, worldId);
+            const totalGp  = (price || 0) * qty;
+            const totalCp  = Math.round(totalGp * 100);
+            const canAfford = totalCopperValue(p) >= totalCp;
+
+            if (!inShop) {
+                state.flags.shopBlocked = `${itemName} is not available in ${state.flags.world?.town || 'this town'}.`;
+            } else if (price == null) {
+                state.flags.shopBlocked = `${itemName} has no listed price - negotiate with the merchant.`;
+            } else if (!canAfford) {
+                const have = (totalCopperValue(p) / 100).toFixed(1);
+                state.flags.shopBlocked = `Cannot afford ${itemName} (costs ${totalGp}gp, you have ${have}gp).`;
+            } else {
+                deductCopper(p, totalCp);
+                for (let i = 0; i < qty; i++) state.inventory.push(itemName);
+                state.flags.shopBlocked = null;
+                postRoll('Purchase', { display: `Bought ${qty > 1 ? qty + 'x ' : ''}${itemName} for ${totalGp}gp. Remaining: ${p.gold}gp ${p.silver}sp ${p.copper}cp` });
+            }
+            break;
+        }
+
+        case 'sell_item': {
+            const itemName = ev.item || '';
+            const idx      = state.inventory.findIndex(i =>
+                i.toLowerCase().includes(itemName.toLowerCase()));
+            if (idx === -1) {
+                state.flags.shopBlocked = `${itemName} not found in inventory.`;
+                break;
+            }
+            const price   = getItemPrice(itemName);
+            const sellGp  = price != null ? price * 0.5 : 0;
+            const sellCp  = Math.round(sellGp * 100);
+            state.inventory.splice(idx, 1);
+            addCopper(p, sellCp);
+            state.flags.shopBlocked = null;
+            postRoll('Sale', { display: `Sold ${itemName} for ${sellGp}gp. Total: ${p.gold}gp ${p.silver}sp ${p.copper}cp` });
+            break;
+        }
 
         case 'stat_change':
             if (ev.stat && ev.stat in p) {
@@ -1600,6 +1644,150 @@ function buildCombatBlock(state) {
 }
 
 
+
+// ── Economy ───────────────────────────────────────────────────────────────────
+// Price table from D&D 5e SRD (in gold pieces).
+// buy_item event validates affordability and deducts gold automatically.
+// sell_item event gives 50% value (5e standard).
+// Currency is tracked as gp/sp/cp and auto-converted.
+// 1gp = 10sp = 100cp
+
+const PRICES = {
+    // ── Weapons (simple) ──
+    'Club':            0.1,   'Dagger':       2,    'Greatclub':    0.2,
+    'Handaxe':         5,     'Javelin':      0.5,  'Light Hammer': 2,
+    'Mace':            5,     'Quarterstaff': 0.2,  'Sickle':       1,
+    'Spear':           1,     'Light Crossbow': 25, 'Shortbow':     25,
+    'Sling':           0.1,
+
+    // ── Weapons (martial) ──
+    'Battleaxe':       10,    'Flail':        10,   'Glaive':       20,
+    'Greataxe':        30,    'Greatsword':   50,   'Halberd':      20,
+    'Longsword':       15,    'Maul':         10,   'Morningstar':  15,
+    'Pike':            5,     'Rapier':       25,   'Scimitar':     25,
+    'Shortsword':      10,    'Trident':      5,    'War Pick':     5,
+    'Warhammer':       15,    'Whip':         2,    'Hand Crossbow':75,
+    'Heavy Crossbow':  50,    'Longbow':      50,
+
+    // ── Armor ──
+    'Padded':          5,     'Leather':      10,   'Studded Leather': 45,
+    'Hide':            10,    'Chain Shirt':  50,   'Scale Mail':  50,
+    'Breastplate':     400,   'Half Plate':   750,  'Ring Mail':   30,
+    'Chain Mail':      75,    'Splint':       200,  'Plate':       1500,
+    'Shield':          10,
+
+    // ── Potions ──
+    'Health Potion':       50,   'Greater Healing Potion': 100,
+    'Superior Healing Potion': 500, 'Supreme Healing Potion': 5000,
+    'Antitoxin':           50,   'Potion of Heroism':       180,
+
+    // ── Adventuring Gear ──
+    'Torch':           0.01,  'Rope (50ft)':  1,    'Bedroll':      1,
+    'Rations (1 day)': 0.5,   'Waterskin':    0.2,  'Backpack':     2,
+    'Tinderbox':       0.5,   'Lantern':      5,    'Oil (flask)':  0.1,
+    'Grappling Hook':  2,     'Crowbar':      2,    'Hammer':       1,
+    'Piton':           0.05,  'Ink':          10,   'Parchment':    0.1,
+    'Chalk':           0.01,  'Candle':       0.01, 'Bag':          0.01,
+    'Component Pouch': 25,    'Spellbook':    50,   'Arcane Focus': 10,
+    'Holy Symbol':     5,     'Druidic Focus':5,    'Thieves Tools':25,
+
+    // ── Services ──
+    'Inn (poor)':      0.1,   'Inn (modest)': 0.5,  'Inn (comfortable)': 2,
+    'Inn (wealthy)':   4,     'Meal (poor)':  0.03, 'Meal (modest)': 0.3,
+    'Hireling (day)':  0.5,   'Messenger':    0.02, 'Stabling':     0.5,
+
+    // ── Mounts ──
+    'Riding Horse':    75,    'Warhorse':     400,  'Mule':         8,
+    'Pony':            30,    'Camel':        50,   'Donkey':       8,
+    'Cart':            15,    'Wagon':        35,
+
+    // ── Ammunition ──
+    'Arrows (20)':     1,     'Bolts (20)':   1,    'Sling Bullets (20)': 0.04,
+};
+
+// What categories are available in each world's town
+// Keys must match world ids
+const SHOP_INVENTORY = {
+    thornvale:  ['weapons_simple','armor_light','potions','gear','services'],
+    saltmere:   ['weapons_simple','weapons_martial','armor_light','armor_medium','potions','gear','services','mounts'],
+    ashford:    ['weapons_simple','weapons_martial','armor_light','armor_medium','armor_heavy','potions','gear','services'],
+    highmark:   ['weapons_simple','weapons_martial','armor_light','armor_medium','potions','gear','services','mounts'],
+    dunmere:    ['weapons_simple','armor_light','potions','gear','services'],
+    ironcross:  ['weapons_simple','weapons_martial','armor_light','armor_medium','potions','gear','services','mounts'],
+};
+
+const CATEGORY_MAP = {
+    weapons_simple:  ['Club','Dagger','Greatclub','Handaxe','Javelin','Light Hammer','Mace','Quarterstaff','Sickle','Spear','Light Crossbow','Shortbow','Sling'],
+    weapons_martial: ['Battleaxe','Flail','Glaive','Greataxe','Greatsword','Halberd','Longsword','Maul','Morningstar','Pike','Rapier','Scimitar','Shortsword','Trident','War Pick','Warhammer','Whip','Hand Crossbow','Heavy Crossbow','Longbow'],
+    armor_light:     ['Padded','Leather','Studded Leather','Shield'],
+    armor_medium:    ['Hide','Chain Shirt','Scale Mail','Breastplate','Half Plate'],
+    armor_heavy:     ['Ring Mail','Chain Mail','Splint','Plate'],
+    potions:         ['Health Potion','Greater Healing Potion','Antitoxin','Potion of Heroism'],
+    gear:            ['Torch','Rope (50ft)','Bedroll','Rations (1 day)','Waterskin','Backpack','Tinderbox','Lantern','Oil (flask)','Grappling Hook','Crowbar','Component Pouch','Spellbook','Thieves Tools','Arrows (20)','Bolts (20)'],
+    services:        ['Inn (poor)','Inn (modest)','Inn (comfortable)','Meal (poor)','Meal (modest)','Hireling (day)','Messenger','Stabling'],
+    mounts:          ['Riding Horse','Warhorse','Mule','Pony','Camel','Cart','Wagon'],
+};
+
+// Convert all currency to copper, then back to gp/sp/cp
+function totalCopperValue(player) {
+    return (player.gold || 0) * 100 +
+           (player.silver || 0) * 10 +
+           (player.copper || 0);
+}
+
+function deductCopper(player, copperAmount) {
+    let total = totalCopperValue(player);
+    total -= copperAmount;
+    if (total < 0) return false;
+    player.gold   = Math.floor(total / 100);
+    player.silver = Math.floor((total % 100) / 10);
+    player.copper = total % 10;
+    return true;
+}
+
+function addCopper(player, copperAmount) {
+    let total = totalCopperValue(player) + copperAmount;
+    player.gold   = Math.floor(total / 100);
+    player.silver = Math.floor((total % 100) / 10);
+    player.copper = total % 10;
+}
+
+function getItemPrice(itemName) {
+    // Exact match first
+    if (PRICES[itemName] != null) return PRICES[itemName];
+    // Fuzzy match
+    const lower = itemName.toLowerCase();
+    for (const [name, price] of Object.entries(PRICES)) {
+        if (name.toLowerCase().includes(lower) || lower.includes(name.toLowerCase())) {
+            return price;
+        }
+    }
+    return null;
+}
+
+function isAvailableInShop(itemName, worldId) {
+    const cats = SHOP_INVENTORY[worldId] || Object.keys(CATEGORY_MAP);
+    for (const cat of cats) {
+        if ((CATEGORY_MAP[cat] || []).some(i => i.toLowerCase() === itemName.toLowerCase())) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function buildShopBlock(worldId) {
+    const cats = SHOP_INVENTORY[worldId] || [];
+    if (!cats.length) return '';
+    const items = cats.flatMap(c => CATEGORY_MAP[c] || []);
+    const lines = ['SHOP AVAILABLE (items and approximate prices):'];
+    for (const item of items.slice(0, 20)) {
+        const price = PRICES[item];
+        lines.push(`  ${item}: ${price >= 1 ? price + 'gp' : price >= 0.1 ? (price * 10) + 'sp' : (price * 100) + 'cp'}`);
+    }
+    if (items.length > 20) lines.push(`  ... and ${items.length - 20} more items`);
+    return lines.join('\n');
+}
+
 // ── Time Engine ───────────────────────────────────────────────────────────────
 // Tracks 24hr clock and day count. Advances automatically each turn.
 // Controls rest legality and encounter probability.
@@ -2600,7 +2788,10 @@ const SimpleLore = {
 
         state.turn      = (state.turn || 0) + 1;
         state.player.ac = calcAC(state);
-        // Advance time each turn unless in active combat (combat time handled per round)
+        // Clear one-shot flags that were shown last turn
+        if (state.flags.restBlocked) delete state.flags.restBlocked;
+        if (state.flags.shopBlocked) delete state.flags.shopBlocked;
+        // Advance time each turn unless in active combat
         if (!state.combat?.active && state.turn > 1) {
             advanceTime(state, MINUTES_PER_TURN);
         }
@@ -2626,12 +2817,20 @@ const SimpleLore = {
             const companionBlock2 = buildCompanionBlock(systemText, state);
             const combatBlock2    = buildCombatBlock(state);
             const restWarning     = state.flags.restBlocked
-                ? `\n\nREST BLOCKED: ${state.flags.restBlocked} Tell the player this and clear state.flags.restBlocked.`
+                ? `\n\nREST BLOCKED: ${state.flags.restBlocked} Tell the player this.`
+                : '';
+            const shopWarning    = state.flags.shopBlocked
+                ? `\n\nSHOP BLOCKED: ${state.flags.shopBlocked} Tell the player this.`
+                : '';
+            const shopBlock      = !state.combat?.active && state.flags.world?.id
+                ? '\n\n' + buildShopBlock(state.flags.world.id)
                 : '';
             systemPrompt = buildStatBlock(state) + '\n\n' + buildQuestAnchor(state) + '\n\n' + rules2
                          + (combatBlock2    ? '\n\n' + combatBlock2    : '')
                          + (companionBlock2 ? '\n\n' + companionBlock2 : '')
-                         + restWarning;
+                         + shopBlock
+                         + restWarning
+                         + shopWarning;
             if (levelUp) {
                 systemPrompt +=
                     `\n\n[LEVEL UP! ${state.player.name} reached level ${levelUp.to} ` +
