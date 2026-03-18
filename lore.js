@@ -14,7 +14,7 @@
  *   - Conditions, long/short rests, gp/sp/cp currency
  */
 
-const VERSION = '2.1.0';
+const VERSION = '2.1.1';
 
 // ── D&D 5e Tables ─────────────────────────────────────────────────────────────
 
@@ -323,16 +323,61 @@ function buildStatBlock(state) {
 
 function parseGameEvents(text) {
     const events = [];
-    const rx = /```game\s*([\s\S]*?)```/gi;
+
+    // Extract all ```game ... ``` and ```json ... ``` fenced blocks
+    const rx = /```(?:game|json)\s*([\s\S]*?)```/gi;
     let m;
     while ((m = rx.exec(text)) !== null) {
-        try {
-            const ev = JSON.parse(m[1].trim());
-            if (Array.isArray(ev)) events.push(...ev);
-            else events.push(ev);
-        } catch (_) { /* malformed  -  skip */ }
+        extractEventsFromBlock(m[1].trim(), events);
     }
+
+    // Also catch bare JSON objects/arrays with a "type" field outside fences
+    const bareRx = /^\s*(\{[\s\S]*?"type"\s*:[\s\S]*?\}|\[[\s\S]*?"type"\s*:[\s\S]*?\])\s*$/gm;
+    while ((m = bareRx.exec(text)) !== null) {
+        extractEventsFromBlock(m[1].trim(), events);
+    }
+
     return events;
+}
+
+function extractEventsFromBlock(block, events) {
+    // 1. Try parsing as valid JSON first (array or single object)
+    try {
+        const parsed = JSON.parse(block);
+        if (Array.isArray(parsed)) {
+            parsed.forEach(ev => { if (ev && ev.type) events.push(ev); });
+        } else if (parsed && parsed.type) {
+            events.push(parsed);
+        }
+        return;
+    } catch (_) { /* fall through to recovery */ }
+
+    // 2. Recovery: extract individual JSON objects line by line
+    // Handles the case where the model dumps multiple objects without array brackets
+    // or mixes loose objects with an array in the same block
+    const lines = block.split('\n');
+    let buffer = '';
+    let depth  = 0;
+
+    for (const line of lines) {
+        for (const ch of line) {
+            if (ch === '{' || ch === '[') depth++;
+            if (ch === '}' || ch === ']') depth--;
+            buffer += ch;
+            if (depth === 0 && buffer.trim()) {
+                try {
+                    const parsed = JSON.parse(buffer.trim());
+                    if (Array.isArray(parsed)) {
+                        parsed.forEach(ev => { if (ev && ev.type) events.push(ev); });
+                    } else if (parsed && parsed.type) {
+                        events.push(parsed);
+                    }
+                } catch (_) { /* skip unparseable fragment */ }
+                buffer = '';
+            }
+        }
+        buffer += '\n';
+    }
 }
 
 function applyEvent(state, ev) {
@@ -1059,6 +1104,11 @@ function buildCreationPrompt(state) {
     return (`
 You are the Game Master. The player is building their D&D 5e character.
 Complete ALL FOUR STEPS before starting the adventure.
+
+-- IMPORTANT --
+If the player provides ALL their choices in a single message (scores, race, class, name),
+process all four steps at once and emit everything in a single fenced block.
+Do NOT ask follow-up questions if all the information is already there.
 
 -- STEP 1  -  ABILITY SCORES --
 The dice have ALREADY been rolled using real 4d6-drop-lowest. Present these EXACT results:
